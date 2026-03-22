@@ -1,6 +1,7 @@
 """
 pages/1_🎯_dividend_screener.py
-日本株 高配当スクリーナー — 3層フィルターエンジン
+日本株・米国株 高配当スクリーナー — 3層フィルターエンジン
+市場・セクター選択で自動銘柄リスト取得、手動追加も可能
 """
 
 import io
@@ -12,7 +13,11 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from screener import ScreenerConfig, screen_from_raw
-from utils.constants import DEFAULT_DIVIDEND_TICKERS, FILTER_STAGES
+from utils.constants import (
+    DEFAULT_DIVIDEND_TICKERS,
+    FILTER_STAGES,
+    JP_DIVIDEND_STOCKS_BY_SECTOR,
+)
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, status_badge_html
 
@@ -20,49 +25,141 @@ st.set_page_config(page_title="高配当スクリーナー", page_icon="🎯", l
 
 hero_header("高配当スクリーナー", "3層フィルターで選ぶ「鉄壁高配当株」", "🎯")
 
+
+# ── Auto-fetch S&P 500 by sector ─────────────────────────────────────────────
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_sp500_by_sector() -> dict | None:
+    """Fetch S&P 500 tickers grouped by sector from Wikipedia. Cached 24h."""
+    try:
+        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+        tables = pd.read_html(url)
+        df = tables[0]
+        result: dict[str, list[str]] = {}
+        for _, row in df.iterrows():
+            sector = str(row.get("GICS Sector", "Other"))
+            symbol = str(row.get("Symbol", "")).strip().replace(".", "-")
+            if symbol:
+                result.setdefault(sector, []).append(symbol)
+        return result
+    except Exception:
+        return None
+
+
+def get_us_sectors_fallback() -> dict[str, list[str]]:
+    """Fallback US sectors from built-in US_STOCKS list."""
+    from utils.constants import US_STOCKS
+    result: dict[str, list[str]] = {}
+    for s in US_STOCKS:
+        result.setdefault(s["sector"], []).append(s["symbol"])
+    return result
+
+
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ スクリーナー設定")
 
-    ticker_input = st.text_area(
-        "銘柄コード（1行1コード）",
-        value="\n".join(DEFAULT_DIVIDEND_TICKERS[:15]),
-        height=200,
-        help="例: 8058.T（日本株）",
+    market_sel = st.radio("マーケット", ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"], horizontal=True)
+
+    st.subheader("銘柄選択")
+
+    auto_tickers: list[str] = []
+
+    # ── 日本株セクター選択 ────────────────────────────────────────────
+    if market_sel in ["🇯🇵 日本株", "🌐 両方"]:
+        if market_sel == "🌐 両方":
+            st.markdown("**🇯🇵 日本株 セクター**")
+        all_jp_sectors = list(JP_DIVIDEND_STOCKS_BY_SECTOR.keys())
+        jp_selected = st.multiselect(
+            "日本株セクターを選択",
+            options=all_jp_sectors,
+            default=all_jp_sectors[:4],
+            help="選択したセクターの銘柄が自動でスクリーニング対象になります",
+            label_visibility="collapsed" if market_sel == "🌐 両方" else "visible",
+        )
+        for sec in jp_selected:
+            auto_tickers.extend(JP_DIVIDEND_STOCKS_BY_SECTOR[sec])
+
+    # ── 米国株セクター選択 ────────────────────────────────────────────
+    if market_sel in ["🇺🇸 米国株", "🌐 両方"]:
+        if market_sel == "🌐 両方":
+            st.markdown("**🇺🇸 米国株 セクター**")
+        with st.spinner("S&P500銘柄リストを取得中..."):
+            sp500_data = fetch_sp500_by_sector()
+        if sp500_data:
+            st.caption("📡 Wikipedia から S&P500 取得済み")
+        else:
+            st.caption("⚠️ 取得失敗 — 内蔵リストを使用")
+            sp500_data = get_us_sectors_fallback()
+        us_sectors = list(sp500_data.keys())
+        us_selected = st.multiselect(
+            "米国株セクターを選択",
+            options=us_sectors,
+            default=us_sectors[:3] if us_sectors else [],
+            help="S&P500の構成銘柄からセクターで絞り込みます",
+            label_visibility="collapsed" if market_sel == "🌐 両方" else "visible",
+        )
+        for sec in us_selected:
+            auto_tickers.extend(sp500_data.get(sec, []))
+
+    selected_count = len(auto_tickers)
+    if selected_count > 0:
+        st.caption(f"自動選択: {selected_count} 銘柄")
+    else:
+        st.warning("セクターを1つ以上選択してください")
+
+    st.subheader("カスタム銘柄追加（任意）")
+    custom_input = st.text_area(
+        "追加銘柄（1行1コード）",
+        height=100,
+        placeholder="例:\n8058.T\nAAPL\n9433.T",
+        help="自動リストに含まれない銘柄を手動で追加できます",
     )
+    custom_tickers = [t.strip() for t in custom_input.strip().split("\n") if t.strip()]
+    if custom_tickers:
+        st.caption(f"＋ カスタム: {len(custom_tickers)} 銘柄")
+
+    # Deduplicate while preserving order
+    all_tickers = list(dict.fromkeys(auto_tickers + custom_tickers))
+
+    if all_tickers:
+        st.info(f"**合計: {len(all_tickers)} 銘柄** をスクリーニング対象とします")
+    else:
+        st.warning("銘柄が0件です。セクターを選択するか、手動で入力してください。")
 
     st.subheader("Layer 1: 財務の鉄壁")
-    equity_ratio_min = st.slider("自己資本比率 最低基準", 0.20, 0.70, 0.40, 0.05, format="%.0f%%",
+    equity_ratio_min = st.slider("自己資本比率 最低基準 (%)", 0, 80, 30, 5, format="%d%%",
                                   help="金融セクターはスキップ")
 
     st.subheader("Layer 2: 配当の誠実さ")
-    dy_min = st.slider("配当利回り 下限", 0.02, 0.06, 0.0375, 0.0025, format="%.2f%%")
-    dy_max = st.slider("配当利回り 上限（罠配当除外）", 0.05, 0.15, 0.08, 0.005, format="%.2f%%")
-    pr_min = st.slider("配当性向 下限", 0.10, 0.50, 0.30, 0.05, format="%.0f%%")
-    pr_max = st.slider("配当性向 上限", 0.50, 1.00, 0.70, 0.05, format="%.0f%%")
+    dy_min = st.slider("配当利回り 下限 (%)", 0.0, 10.0, 3.0, 0.5, format="%.1f%%")
+    dy_max = st.slider("配当利回り 上限（罠配当除外）(%)", 0.0, 20.0, 10.0, 0.5, format="%.1f%%")
+    pr_min = st.slider("配当性向 下限 (%)", 0, 100, 0, 5, format="%d%%")
+    pr_max = st.slider("配当性向 上限 (%)", 0, 100, 80, 5, format="%d%%")
 
     st.subheader("Layer 3: 稼ぐ力")
-    om_min = st.slider("営業利益率 最低基準", 0.03, 0.25, 0.10, 0.01, format="%.0f%%")
-    roe_min = st.slider("ROE 最低基準", 0.03, 0.20, 0.08, 0.01, format="%.0f%%")
+    om_min = st.slider("営業利益率 最低基準 (%)", 0, 30, 5, 1, format="%d%%")
+    roe_min = st.slider("ROE 最低基準 (%)", 0, 30, 8, 1, format="%d%%")
 
     st.divider()
-    run_button = st.button("🚀 スクリーニング実行", type="primary", use_container_width=True)
+    run_button = st.button("🚀 スクリーニング実行", type="primary", use_container_width=True,
+                            disabled=(len(all_tickers) == 0))
 
     if st.button("🗑️ キャッシュクリア", use_container_width=True):
         _cached_fetch.clear()
+        fetch_sp500_by_sector.clear()
         for k in list(st.session_state.keys()):
             if k.startswith("_fetched_"):
                 del st.session_state[k]
         st.success("キャッシュをクリアしました")
 
 cfg = ScreenerConfig(
-    equity_ratio_min=equity_ratio_min,
-    dividend_yield_min=dy_min,
-    dividend_yield_max=dy_max,
-    payout_ratio_min=pr_min,
-    payout_ratio_max=pr_max,
-    operating_margin_min=om_min,
-    roe_min=roe_min,
+    equity_ratio_min=equity_ratio_min / 100,
+    dividend_yield_min=dy_min / 100,
+    dividend_yield_max=dy_max / 100,
+    payout_ratio_min=pr_min / 100,
+    payout_ratio_max=pr_max / 100,
+    operating_margin_min=om_min / 100,
+    roe_min=roe_min / 100,
 )
 
 # ── 3-Layer Explanation Cards ────────────────────────────────────────────────
@@ -93,17 +190,23 @@ with st.expander("📖 3層フィルターについて", expanded=False):
 
 # ── Main Execution ───────────────────────────────────────────────────────────
 if run_button or "screener_results" in st.session_state:
-    tickers = [t.strip() for t in ticker_input.strip().split("\n") if t.strip()]
+    tickers = all_tickers if run_button else [
+        r["ticker"] for r in st.session_state.get("screener_results", [])
+    ]
 
     if run_button:
+        if not all_tickers:
+            st.error("スクリーニング対象銘柄がありません。セクターを選択してください。")
+            st.stop()
+
         results = []
         log_lines = []
 
         progress_bar = st.progress(0, text="スクリーニング開始...")
         log_placeholder = st.empty()
 
-        for i, symbol in enumerate(tickers):
-            progress_bar.progress((i + 1) / len(tickers), text=f"処理中: {symbol} ({i+1}/{len(tickers)})")
+        for i, symbol in enumerate(all_tickers):
+            progress_bar.progress((i + 1) / len(all_tickers), text=f"処理中: {symbol} ({i+1}/{len(all_tickers)})")
 
             raw, is_hit = fetch_with_cache_flag(symbol)
             cache_icon = "💾" if is_hit else "🌐"
@@ -141,7 +244,6 @@ if run_button or "screener_results" in st.session_state:
 
     # Re-run screening with updated config (pure function, no re-fetch)
     if "screener_config" in st.session_state and not run_button:
-        raw_cache = {}
         rerun_results = []
         for r in results:
             sym = r["ticker"]
@@ -318,4 +420,4 @@ if run_button or "screener_results" in st.session_state:
         } for r in filtered])
         st.dataframe(df_all, use_container_width=True, hide_index=True)
 else:
-    st.info("👈 サイドバーから銘柄を設定して「スクリーニング実行」ボタンを押してください")
+    st.info("👈 サイドバーからマーケット・セクターを選択して「スクリーニング実行」ボタンを押してください")

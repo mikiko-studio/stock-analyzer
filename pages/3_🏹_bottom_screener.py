@@ -223,9 +223,86 @@ if run_btn or "bottom_results" in st.session_state:
                         fig.update_layout(height=300, margin=dict(t=10, b=10), showlegend=True)
                         st.plotly_chart(fig, use_container_width=True)
                 with c2:
-                    st.metric("RSI(14)", f"{r.get('rsi14', 0):.1f}")
-                    st.metric("25日MA乖離", f"{r.get('ma25_dev', 0):.1f}%")
+                    rsi_val = r.get("rsi14", 0) or 0
+                    ma_dev_val = r.get("ma25_dev", 0) or 0
+                    high_52w = r.get("high_52w")
+                    low_52w = r.get("low_52w")
+                    price_val = r.get("price")
+                    vol_ratio = r.get("vol_ratio")
+
+                    st.metric("RSI(14)", f"{rsi_val:.1f}")
+                    # RSI interpretation
+                    if rsi_val < 30:
+                        rsi_interp = f"現在値 {rsi_val:.1f} → **売られすぎ水準**（買いシグナル）。短期リバウンドに期待できる"
+                        st.success(rsi_interp)
+                    elif rsi_val < 40:
+                        rsi_interp = f"現在値 {rsi_val:.1f} → 弱め。売り圧力が続いているが底打ちに近い可能性"
+                        st.info(rsi_interp)
+                    elif rsi_val < 60:
+                        rsi_interp = f"現在値 {rsi_val:.1f} → 中立。特段のシグナルなし"
+                        st.info(rsi_interp)
+                    elif rsi_val < 70:
+                        rsi_interp = f"現在値 {rsi_val:.1f} → やや強め。勢いはあるが過熱感に注意"
+                        st.warning(rsi_interp)
+                    else:
+                        rsi_interp = f"現在値 {rsi_val:.1f} → **買われすぎ水準**（売りシグナル）。短期的な調整に注意"
+                        st.error(rsi_interp)
+
+                    st.metric("25日MA乖離", f"{ma_dev_val:.1f}%")
+                    # MA deviation interpretation
+                    if ma_dev_val <= -10:
+                        ma_interp = f"現在値 {ma_dev_val:.1f}% → **大幅下乖離**。リバウンド期待が高い水準。底値圏の可能性"
+                        st.success(ma_interp)
+                    elif ma_dev_val <= -5:
+                        ma_interp = f"現在値 {ma_dev_val:.1f}% → 下乖離。押し目買いを検討できる水準"
+                        st.info(ma_interp)
+                    elif ma_dev_val <= 5:
+                        ma_interp = f"現在値 {ma_dev_val:.1f}% → MA付近で推移。トレンドを見極める局面"
+                        st.info(ma_interp)
+                    elif ma_dev_val <= 10:
+                        ma_interp = f"現在値 {ma_dev_val:.1f}% → 上乖離。勢いはあるが押し目を待つのが無難"
+                        st.warning(ma_interp)
+                    else:
+                        ma_interp = f"現在値 {ma_dev_val:.1f}% → **大幅上乖離**。過熱感あり。新規買いは慎重に"
+                        st.error(ma_interp)
+
+                    # 52W high/low interpretations
+                    if price_val and high_52w and low_52w and high_52w > low_52w:
+                        from_high_pct = (price_val - high_52w) / high_52w * 100
+                        from_low_pct = (price_val - low_52w) / low_52w * 100
+
+                        st.metric("52週高値比", f"{from_high_pct:.1f}%")
+                        if from_high_pct <= -30:
+                            st.success(f"高値から**{abs(from_high_pct):.0f}%下落**した水準。大きな押し目買いの候補")
+                        elif from_high_pct <= -20:
+                            st.info(f"高値から**{abs(from_high_pct):.0f}%下落**。押し目買いを検討できる水準")
+                        elif from_high_pct <= -10:
+                            st.info(f"高値から**{abs(from_high_pct):.0f}%下落**。中程度の調整")
+                        else:
+                            st.warning(f"高値から**{abs(from_high_pct):.0f}%下落**。まだ高値圏に近い")
+
+                        st.metric("52週安値比", f"+{from_low_pct:.1f}%")
+                        if from_low_pct <= 10:
+                            st.success(f"安値から**{from_low_pct:.0f}%上昇**した水準。底値に非常に近い")
+                        elif from_low_pct <= 20:
+                            st.info(f"安値から**{from_low_pct:.0f}%上昇**。安値圏に近い")
+                        else:
+                            st.info(f"安値から**{from_low_pct:.0f}%上昇**した水準")
+
+                    # Volume interpretation
+                    if vol_ratio is not None:
+                        st.metric("出来高比率（20日平均比）", f"{vol_ratio:.1f}x")
+                        if vol_ratio >= 2.0:
+                            st.success(f"現在値 **{vol_ratio:.1f}倍** → 通常の2倍以上の出来高。大きな注目・転換点の可能性")
+                        elif vol_ratio >= 1.5:
+                            st.info(f"現在値 **{vol_ratio:.1f}倍** → 注目度上昇中。トレンド転換のサインかもしれない")
+                        elif vol_ratio >= 0.8:
+                            st.info(f"現在値 **{vol_ratio:.1f}倍** → 平均的な出来高。特段のシグナルなし")
+                        else:
+                            st.warning(f"現在値 **{vol_ratio:.1f}倍** → 閑散相場。積極的な買い手が少ない")
+
                     st.metric("下落理由", r.get("drop_reason", "不明"))
+
                     # News
                     if r.get("news"):
                         st.markdown("**最新ニュース:**")

@@ -5,7 +5,6 @@ pages/2_📐_buffett_screener.py
 
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 from utils.constants import JP_STOCKS, SECTOR_PE_JP, SECTOR_PE_US, US_STOCKS
@@ -22,7 +21,6 @@ TERMINAL_GROWTH = 0.03
 DCF_YEARS = 10
 HURDLE_RATE = 0.10
 
-# Max growth cap by sector
 GROWTH_CAPS = {
     "Technology": 0.20, "Communication Services": 0.15,
     "Consumer Discretionary": 0.15, "Consumer Staples": 0.10,
@@ -37,20 +35,25 @@ GROWTH_CAPS = {
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ スクリーナー設定")
-    market = st.radio("マーケット", ["🇯🇵 日本株", "🇺🇸 米国株"], horizontal=True)
-    is_jp = market.startswith("🇯🇵")
-    stocks = JP_STOCKS if is_jp else US_STOCKS
-    sector_pe = SECTOR_PE_JP if is_jp else SECTOR_PE_US
+    market = st.radio("マーケット", ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"], horizontal=True)
 
-    max_stocks = st.slider("分析銘柄数（上位N件）", 5, len(stocks), min(20, len(stocks)), 5)
-    show_explanation = st.toggle("🔍 トップ銘柄の詳細説明を表示", value=True)
+    if market == "🌐 両方":
+        max_jp = st.slider("日本株 分析銘柄数", 5, len(JP_STOCKS), min(15, len(JP_STOCKS)), 5)
+        max_us = st.slider("米国株 分析銘柄数", 5, len(US_STOCKS), min(15, len(US_STOCKS)), 5)
+        stocks = [{"**market**": "JP", **s} for s in JP_STOCKS[:max_jp]] + \
+                 [{"**market**": "US", **s} for s in US_STOCKS[:max_us]]
+    else:
+        is_jp = market.startswith("🇯🇵")
+        base_stocks = JP_STOCKS if is_jp else US_STOCKS
+        max_stocks = st.slider("分析銘柄数（上位N件）", 5, len(base_stocks), min(20, len(base_stocks)), 5)
+        stocks = base_stocks[:max_stocks]
+
     card_view = st.toggle("🃏 カード表示モード", value=False)
     run_btn = st.button("🚀 分析実行", type="primary", use_container_width=True)
 
 
 # ── Valuation Models ─────────────────────────────────────────────────────────
 def calc_pe_score(pe, sector, sector_pe_map):
-    """P/E score: compare to sector benchmark."""
     if pe is None or np.isnan(pe):
         return 0, None
     benchmark = sector_pe_map.get(sector, 20)
@@ -69,14 +72,12 @@ def calc_pe_score(pe, sector, sector_pe_map):
 
 def calc_dcf(eps, growth_rate, discount_rate=DISCOUNT_RATE,
              terminal_growth=TERMINAL_GROWTH, years=DCF_YEARS):
-    """Calculate DCF intrinsic value."""
     if eps is None or eps <= 0:
         return None
     pv = 0
     for y in range(1, years + 1):
         projected_eps = eps * (1 + growth_rate) ** y
         pv += projected_eps / (1 + discount_rate) ** y
-    # Terminal value
     terminal_eps = eps * (1 + growth_rate) ** years
     terminal_value = (terminal_eps * (1 + terminal_growth)) / (discount_rate - terminal_growth)
     pv += terminal_value / (1 + discount_rate) ** years
@@ -84,7 +85,6 @@ def calc_dcf(eps, growth_rate, discount_rate=DISCOUNT_RATE,
 
 
 def calc_dcf_score(price, intrinsic_value):
-    """DCF score: compare current price to intrinsic value."""
     if intrinsic_value is None or price is None or intrinsic_value <= 0:
         return 0, None
     margin = (intrinsic_value - price) / intrinsic_value
@@ -101,7 +101,6 @@ def calc_dcf_score(price, intrinsic_value):
 
 
 def calc_gdm(eps, growth_rate, bond_yield=0.045):
-    """Graham Defensive Model: EPS × (8.5 + 2g) × 4.4 / Y"""
     if eps is None or eps <= 0:
         return None
     if bond_yield <= 0:
@@ -110,7 +109,6 @@ def calc_gdm(eps, growth_rate, bond_yield=0.045):
 
 
 def calc_gdm_score(price, gdm_value):
-    """GDM score."""
     if gdm_value is None or price is None or gdm_value <= 0:
         return 0, None
     margin = (gdm_value - price) / gdm_value
@@ -127,7 +125,6 @@ def calc_gdm_score(price, gdm_value):
 
 
 def calc_cagr(price, eps, div_yield, growth_rate, years=10):
-    """Calculate expected CAGR."""
     if price is None or eps is None or price <= 0:
         return None
     future_price = price * (1 + growth_rate) ** years
@@ -139,12 +136,15 @@ def calc_cagr(price, eps, div_yield, growth_rate, years=10):
         return None
 
 
-def analyze_stock(stock_info, data):
+def analyze_stock(stock_info, data, sector_pe_jp=SECTOR_PE_JP, sector_pe_us=SECTOR_PE_US):
     """Run all 3 valuation models on a stock."""
     if data is None:
         return None
 
     symbol = stock_info["symbol"]
+    is_jp_stock = symbol.endswith(".T")
+    sector_pe_map = sector_pe_jp if is_jp_stock else sector_pe_us
+
     sector = stock_info.get("sector", data.get("sector", "Unknown"))
     price = data.get("price")
     eps = data.get("trailingEps") or data.get("forwardEps")
@@ -153,13 +153,11 @@ def analyze_stock(stock_info, data):
     revenue_growth = data.get("revenueGrowth") or 0
     earnings_growth = data.get("earningsGrowth") or 0
 
-    # Growth rate: cap to sector maximum
     raw_growth = max(revenue_growth, earnings_growth)
     cap = GROWTH_CAPS.get(sector, 0.12)
     growth = min(max(raw_growth, 0.02), cap)
 
-    # Model scores
-    pe_score, pe_ratio = calc_pe_score(pe, sector, sector_pe)
+    pe_score, pe_ratio = calc_pe_score(pe, sector, sector_pe_map)
     dcf_val = calc_dcf(eps, growth)
     dcf_score, dcf_margin = calc_dcf_score(price, dcf_val)
     gdm_val = calc_gdm(eps, growth)
@@ -167,6 +165,7 @@ def analyze_stock(stock_info, data):
     composite = pe_score + dcf_score + gdm_score
 
     cagr = calc_cagr(price, eps, div_yield, growth)
+    benchmark = sector_pe_map.get(sector, 20)
 
     return {
         "symbol": symbol,
@@ -181,6 +180,7 @@ def analyze_stock(stock_info, data):
         "gdm_value": gdm_val,
         "pe_score": pe_score,
         "pe_ratio": pe_ratio,
+        "pe_benchmark": benchmark,
         "dcf_score": dcf_score,
         "dcf_margin": dcf_margin,
         "gdm_score": gdm_score,
@@ -191,28 +191,133 @@ def analyze_stock(stock_info, data):
     }
 
 
-# ── Main ─────────────────────────────────────────────────────────────────────
-if run_btn or f"buffett_results_{market}" in st.session_state:
-    target_stocks = stocks[:max_stocks]
+# ── Metric Interpretation Helpers ────────────────────────────────────────────
+def interpret_pe(r: dict) -> str:
+    pe = r.get("pe")
+    pe_score = r.get("pe_score", 0)
+    pe_ratio = r.get("pe_ratio")
+    benchmark = r.get("pe_benchmark", 20)
+    if pe is None:
+        return "P/Eデータなし — 計算不可"
+    ratio_str = f"{pe_ratio:.2f}" if pe_ratio else "N/A"
+    if pe_score == 2:
+        return f"P/E **{pe:.1f}** → セクター平均({benchmark})の{ratio_str}倍。**大幅割安** — 積極的な買い候補"
+    elif pe_score == 1:
+        return f"P/E **{pe:.1f}** → セクター平均({benchmark})より割安。**買いを検討できる水準**"
+    elif pe_score == 0:
+        return f"P/E **{pe:.1f}** → セクター平均({benchmark})並み。フェアバリュー — 割安感は薄い"
+    elif pe_score == -1:
+        return f"P/E **{pe:.1f}** → セクター平均({benchmark})より**割高**。成長性で正当化できるか要確認"
+    else:
+        return f"P/E **{pe:.1f}** → セクター平均({benchmark})の{ratio_str}倍。**大幅割高** — 高成長期待が織り込み済み"
 
+
+def interpret_dcf(r: dict) -> str:
+    dcf_val = r.get("dcf_value")
+    dcf_score = r.get("dcf_score", 0)
+    dcf_margin = r.get("dcf_margin")
+    currency = r.get("currency", "JPY")
+    eps = r.get("eps")
+    if dcf_val is None or eps is None:
+        return "DCF計算不可 — EPSデータなし（赤字企業や非公開企業に多い）"
+    margin_pct = abs(dcf_margin * 100) if dcf_margin else 0
+    val_str = format_currency(dcf_val, currency)
+    if dcf_score == 2:
+        return f"内在価値({val_str})より現在株価が**{margin_pct:.0f}%割安**。安全マージン十分 — バフェットが好む水準"
+    elif dcf_score == 1:
+        return f"内在価値({val_str})より**{margin_pct:.0f}%割安**。買いを検討できる水準"
+    elif dcf_score == 0:
+        return f"内在価値({val_str})と**ほぼ同水準**。フェアバリュー — 大きな上値余地は限定的"
+    elif dcf_score == -1:
+        return f"内在価値({val_str})より**{margin_pct:.0f}%割高**。将来成長が現在価格に織り込まれている"
+    else:
+        return f"内在価値({val_str})より**{margin_pct:.0f}%割高**。高成長を前提にした価格設定 — 期待外れリスクに注意"
+
+
+def interpret_gdm(r: dict) -> str:
+    gdm_val = r.get("gdm_value")
+    gdm_score = r.get("gdm_score", 0)
+    gdm_margin = r.get("gdm_margin")
+    currency = r.get("currency", "JPY")
+    eps = r.get("eps")
+    if gdm_val is None or eps is None:
+        return "グレアム価値計算不可 — EPSデータなし"
+    margin_pct = abs(gdm_margin * 100) if gdm_margin else 0
+    val_str = format_currency(gdm_val, currency)
+    if gdm_score == 2:
+        return f"グレアム価値({val_str})より**{margin_pct:.0f}%割安**。防衛的投資家に適した水準 — 下値リスクが小さい"
+    elif gdm_score == 1:
+        return f"グレアム価値({val_str})より**{margin_pct:.0f}%割安**。保守的評価でも割安"
+    elif gdm_score == 0:
+        return f"グレアム価値({val_str})と**ほぼ同水準**。保守的にはフェアバリュー"
+    elif gdm_score == -1:
+        return f"グレアム価値({val_str})より**{margin_pct:.0f}%割高**。保守的投資家には割高感あり"
+    else:
+        return f"グレアム価値({val_str})より**{margin_pct:.0f}%割高**。グレアム基準では買いにくい水準"
+
+
+def render_stock_detail(r: dict, sector_pe_map_jp=SECTOR_PE_JP, sector_pe_map_us=SECTOR_PE_US):
+    """Render detailed analysis for a selected stock."""
+    color = score_color(r["composite"], 6)
+    st.markdown(
+        f"<h4>{r['symbol']} — {r['name']} "
+        f"<span style='color:{color}'>総合スコア: {r['composite']}/6</span></h4>",
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("**📊 P/E 分析**")
+        pe_color = score_color(r["pe_score"])
+        st.markdown(f"- 実績P/E: **{r.get('pe', 'N/A')}**")
+        st.markdown(f"- セクター基準P/E: {r.get('pe_benchmark', 'N/A')}")
+        pe_ratio = r.get("pe_ratio")
+        st.markdown(f"- セクター比: {f'{pe_ratio:.2f}' if pe_ratio else 'N/A'}")
+        st.markdown(f"- スコア: **<span style='color:{pe_color}'>{r['pe_score']:+d}</span>**", unsafe_allow_html=True)
+        st.info(interpret_pe(r))
+
+    with c2:
+        st.markdown("**💰 DCF 分析（割引キャッシュフロー）**")
+        dcf_color = score_color(r["dcf_score"])
+        st.markdown(f"- EPS: **{r.get('eps', 'N/A')}**")
+        st.markdown(f"- 推定成長率: {format_pct(r.get('growth'))}")
+        st.markdown(f"- 内在価値: **{format_currency(r.get('dcf_value'), r['currency'])}**")
+        st.markdown(f"- スコア: **<span style='color:{dcf_color}'>{r['dcf_score']:+d}</span>**", unsafe_allow_html=True)
+        st.info(interpret_dcf(r))
+
+    with c3:
+        st.markdown("**📐 GDM 分析（グレアム防衛モデル）**")
+        gdm_color = score_color(r["gdm_score"])
+        st.markdown(f"- グレアム価値: **{format_currency(r.get('gdm_value'), r['currency'])}**")
+        st.markdown(f"- 現在株価: **{format_currency(r.get('price'), r['currency'])}**")
+        st.markdown(f"- 期待CAGR: {format_pct(r.get('cagr'))}")
+        st.markdown(f"- スコア: **<span style='color:{gdm_color}'>{r['gdm_score']:+d}</span>**", unsafe_allow_html=True)
+        st.info(interpret_gdm(r))
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+session_key = f"buffett_results_{market}"
+
+if run_btn or session_key in st.session_state:
     if run_btn:
         results = []
         progress = st.progress(0, text="分析中...")
-        for i, s in enumerate(target_stocks):
-            progress.progress((i + 1) / len(target_stocks), text=f"分析中: {s['symbol']}")
-            data, _ = fetch_with_cache_flag(s["symbol"])
+        target = stocks
+        for i, s in enumerate(target):
+            sym = s["symbol"]
+            progress.progress((i + 1) / len(target), text=f"分析中: {sym}")
+            data, _ = fetch_with_cache_flag(sym)
             result = analyze_stock(s, data)
             if result:
                 results.append(result)
         progress.empty()
-        st.session_state[f"buffett_results_{market}"] = results
+        st.session_state[session_key] = results
 
-    results = st.session_state.get(f"buffett_results_{market}", [])
+    results = st.session_state.get(session_key, [])
     if not results:
         st.warning("分析結果がありません")
         st.stop()
 
-    # Sort by composite score
     results = sorted(results, key=lambda x: x["composite"], reverse=True)
 
     # ── Summary ──────────────────────────────────────────────────────────────
@@ -226,7 +331,6 @@ if run_btn or f"buffett_results_{market}" in st.session_state:
     m4.metric("トップ銘柄", f"{top['symbol']} ({top['composite']}点)")
 
     if card_view:
-        # Card view
         cols = st.columns(3)
         for i, r in enumerate(results[:9]):
             with cols[i % 3]:
@@ -241,7 +345,6 @@ P/E: {r['pe_score']:+d} | DCF: {r['dcf_score']:+d} | GDM: {r['gdm_score']:+d}<br
 </div>
 """, unsafe_allow_html=True)
     else:
-        # Table view
         df = pd.DataFrame([{
             "銘柄": r["symbol"],
             "会社名": r["name"][:12],
@@ -256,62 +359,62 @@ P/E: {r['pe_score']:+d} | DCF: {r['dcf_score']:+d} | GDM: {r['gdm_score']:+d}<br
         } for r in results])
         st.dataframe(df, use_container_width=True, hide_index=True)
 
-    # Score heatmap
-    with st.expander("📊 スコア分布チャート"):
-        fig = go.Figure()
-        fig.add_trace(go.Bar(
-            name="P/E スコア",
-            x=[r["symbol"] for r in results[:20]],
-            y=[r["pe_score"] for r in results[:20]],
-            marker_color="#3b82f6",
-        ))
-        fig.add_trace(go.Bar(
-            name="DCF スコア",
-            x=[r["symbol"] for r in results[:20]],
-            y=[r["dcf_score"] for r in results[:20]],
-            marker_color="#22c55e",
-        ))
-        fig.add_trace(go.Bar(
-            name="GDM スコア",
-            x=[r["symbol"] for r in results[:20]],
-            y=[r["gdm_score"] for r in results[:20]],
-            marker_color="#f59e0b",
-        ))
-        fig.update_layout(
-            barmode="group",
-            title="銘柄別 評価スコア内訳",
-            yaxis_title="スコア (-2 to +2)",
-            height=400,
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # ── Stock Detail (user selects from table) ────────────────────────────────
+    st.subheader("🔍 銘柄詳細分析")
+    symbol_options = [f"{r['symbol']} — {r['name'][:12]}　（スコア: {r['composite']}/6）" for r in results]
+    selected_idx = st.selectbox(
+        "詳細を確認したい銘柄を選択",
+        options=range(len(symbol_options)),
+        format_func=lambda i: symbol_options[i],
+        index=0,
+    )
+    selected = results[selected_idx]
 
-    # Top stock explanation
-    if show_explanation and results:
-        top = results[0]
-        with st.expander(f"🔍 トップ銘柄詳細: {top['symbol']} {top['name']}", expanded=True):
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown("**📊 P/E 分析**")
-                st.markdown(f"- 実績P/E: {top.get('pe', 'N/A')}")
-                benchmark = sector_pe.get(top["sector"], 20)
-                st.markdown(f"- セクター基準P/E: {benchmark}")
-                pe_ratio = top.get("pe_ratio")
-                st.markdown(f"- 比率: {f'{pe_ratio:.2f}' if pe_ratio else 'N/A'}")
-                color = score_color(top["pe_score"])
-                st.markdown(f"- スコア: **<span style='color:{color}'>{top['pe_score']:+d}</span>**", unsafe_allow_html=True)
-            with c2:
-                st.markdown("**💰 DCF 分析**")
-                st.markdown(f"- EPS: {top.get('eps', 'N/A')}")
-                st.markdown(f"- 推定成長率: {format_pct(top.get('growth'))}")
-                st.markdown(f"- 内在価値: {format_currency(top.get('dcf_value'), top['currency'])}")
-                color = score_color(top["dcf_score"])
-                st.markdown(f"- スコア: **<span style='color:{color}'>{top['dcf_score']:+d}</span>**", unsafe_allow_html=True)
-            with c3:
-                st.markdown("**📐 GDM 分析**")
-                st.markdown(f"- グレアム価値: {format_currency(top.get('gdm_value'), top['currency'])}")
-                st.markdown(f"- 現在株価: {format_currency(top.get('price'), top['currency'])}")
-                st.markdown(f"- 期待CAGR: {format_pct(top.get('cagr'))}")
-                color = score_color(top["gdm_score"])
-                st.markdown(f"- スコア: **<span style='color:{color}'>{top['gdm_score']:+d}</span>**", unsafe_allow_html=True)
+    with st.container(border=True):
+        render_stock_detail(selected)
+
 else:
     st.info("👈 サイドバーからマーケットを選択して「分析実行」を押してください")
+
+# ── 単独銘柄チェック ──────────────────────────────────────────────────────────
+st.divider()
+st.subheader("🎯 単独銘柄チェック")
+st.caption("スクリーニング結果に関係なく、気になる銘柄を単体で分析します")
+
+with st.form("single_check_form"):
+    col_a, col_b = st.columns([3, 1])
+    with col_a:
+        single_input = st.text_input(
+            "銘柄コードを入力",
+            placeholder="例: 7203.T（トヨタ）、AAPL（Apple）",
+        )
+    with col_b:
+        single_sector = st.text_input(
+            "セクター（任意）",
+            placeholder="例: 輸送用機器",
+            help="空欄の場合は yfinance のセクター情報を使用します",
+        )
+    check_btn = st.form_submit_button("🔍 分析する", type="primary")
+
+if check_btn and single_input.strip():
+    sym = single_input.strip()
+    with st.spinner(f"{sym} のデータを取得中..."):
+        data, _ = fetch_with_cache_flag(sym)
+
+    if data is None:
+        st.error(f"「{sym}」のデータを取得できませんでした。銘柄コードを確認してください。")
+    else:
+        sector_override = single_sector.strip() if single_sector.strip() else data.get("sector", "Unknown")
+        stock_info_single = {
+            "symbol": sym,
+            "name": data.get("name", sym),
+            "sector": sector_override,
+        }
+        single_result = analyze_stock(stock_info_single, data)
+        if single_result:
+            with st.container(border=True):
+                render_stock_detail(single_result)
+        else:
+            st.warning("スコアを計算できませんでした（EPSや株価データが不足している可能性があります）")
+elif check_btn:
+    st.warning("銘柄コードを入力してください")
