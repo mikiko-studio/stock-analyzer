@@ -13,7 +13,7 @@ import streamlit as st
 
 from utils.constants import WATCH_LIST_JP, WATCH_LIST_US
 from utils.data_fetcher import fetch_with_cache_flag
-from utils.ui_helpers import format_pct, format_currency, hero_header
+from utils.ui_helpers import format_pct, format_currency, hero_header, render_export_buttons
 
 st.set_page_config(page_title="シグナル・ハンター", page_icon="🏹", layout="wide")
 
@@ -192,6 +192,28 @@ if run_btn or "bottom_results" in st.session_state:
 
     df = pd.DataFrame(rows)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Export buttons (raw numeric values for proper Excel formatting)
+    df_export = pd.DataFrame([{
+        "シグナル": "買い" if r["buy_signal"] else "",
+        "銘柄": r["symbol"],
+        "会社名": r["name"],
+        "株価": r.get("price"),
+        "通貨": r.get("currency", "JPY"),
+        "RSI(14)": r.get("rsi14"),
+        "25日MA乖離率": (r.get("ma25_dev") or 0) / 100,
+        "52W High": r.get("high_52w"),
+        "52W Low": r.get("low_52w"),
+        "底値近接率": (r.get("low_proximity") or 0) / 100,
+        "出来高比率(倍)": r.get("vol_ratio"),
+        "下落理由": r.get("drop_reason", ""),
+    } for r in display_results])
+    render_export_buttons(
+        df_export,
+        filename_prefix="bottom_screener",
+        pct_cols=["25日MA乖離率", "底値近接率"],
+        float2_cols=["株価", "RSI(14)", "出来高比率(倍)", "52W High", "52W Low"],
+    )
 
     # ── Buy Signal Details ───────────────────────────────────────────────────
     if signals:

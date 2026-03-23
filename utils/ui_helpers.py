@@ -3,6 +3,9 @@ utils/ui_helpers.py
 Shared formatting and UI helper functions for all pages.
 """
 
+import io
+from datetime import datetime
+
 import pandas as pd
 import streamlit as st
 
@@ -103,5 +106,107 @@ def status_badge_html(status):
 
 def make_color_scale_df(df, col, reverse=False):
     """Apply background color gradient to a DataFrame column."""
-    # Returns a styled DataFrame
     return df.style.background_gradient(subset=[col], cmap="RdYlGn" if not reverse else "RdYlGn_r")
+
+
+def _to_excel_bytes(df: pd.DataFrame, pct_cols: list[str] | None = None,
+                    float2_cols: list[str] | None = None) -> bytes:
+    """
+    Convert DataFrame to Excel bytes with styled header and number formatting.
+
+    pct_cols  : columns whose values are 0.0–1.0 fractions → formatted as "0.00%"
+    float2_cols: columns with plain floats → formatted as "#,##0.00"
+    """
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    pct_cols = pct_cols or []
+    float2_cols = float2_cols or []
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "結果"
+
+    header_fill = PatternFill(start_color="1E3A5F", end_color="1E3A5F", fill_type="solid")
+    header_font = Font(bold=True, color="FFFFFF", size=11)
+    center = Alignment(horizontal="center", vertical="center")
+
+    # ── Header row ───────────────────────────────────────────────────────────
+    for col_idx, col_name in enumerate(df.columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = center
+    ws.row_dimensions[1].height = 20
+
+    # ── Data rows ────────────────────────────────────────────────────────────
+    for row_idx, row in enumerate(df.itertuples(index=False), 2):
+        for col_idx, (col_name, value) in enumerate(zip(df.columns, row), 1):
+            # Convert pandas NA/NaN to None so openpyxl writes blank
+            if value is not None:
+                try:
+                    import math
+                    if isinstance(value, float) and math.isnan(value):
+                        value = None
+                except (TypeError, ValueError):
+                    pass
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            if col_name in pct_cols and isinstance(value, (int, float)):
+                cell.number_format = "0.00%"
+            elif col_name in float2_cols and isinstance(value, (int, float)):
+                cell.number_format = "#,##0.00"
+
+    # ── Auto column width ─────────────────────────────────────────────────
+    for col_idx, col_name in enumerate(df.columns, 1):
+        col_letter = get_column_letter(col_idx)
+        max_len = len(str(col_name))
+        for val in df[col_name]:
+            if val is not None:
+                try:
+                    import math
+                    if isinstance(val, float) and math.isnan(val):
+                        continue
+                except (TypeError, ValueError):
+                    pass
+                max_len = max(max_len, len(str(val)))
+        ws.column_dimensions[col_letter].width = min(max_len + 3, 40)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def render_export_buttons(df: pd.DataFrame, filename_prefix: str,
+                          pct_cols: list[str] | None = None,
+                          float2_cols: list[str] | None = None) -> None:
+    """
+    Render side-by-side CSV and Excel download buttons below a results table.
+
+    filename_prefix : e.g. "dividend_screener" → "dividend_screener_20260322_1430.csv"
+    pct_cols        : column names whose values are fractions (0.0–1.0) for % Excel format
+    float2_cols     : column names with plain floats for "#,##0.00" Excel format
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+    base = f"{filename_prefix}_{timestamp}"
+
+    csv_bytes = df.to_csv(index=False, encoding="utf-8-sig").encode("utf-8-sig")
+    xlsx_bytes = _to_excel_bytes(df, pct_cols=pct_cols, float2_cols=float2_cols)
+
+    btn_col1, btn_col2, _ = st.columns([1, 1, 2])
+    with btn_col1:
+        st.download_button(
+            label="📥 CSV ダウンロード",
+            data=csv_bytes,
+            file_name=f"{base}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
+    with btn_col2:
+        st.download_button(
+            label="📊 Excel ダウンロード",
+            data=xlsx_bytes,
+            file_name=f"{base}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )

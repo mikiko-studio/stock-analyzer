@@ -14,6 +14,7 @@ Layers:
 
 import math
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 import pandas as pd
@@ -30,7 +31,12 @@ class ScreenerConfig:
     payout_ratio_max: float = 0.70
     operating_margin_min: float = 0.10
     roe_min: float = 0.08
-    dividend_history_years: int = 10
+    dividend_history_years: int = 5
+    # When True, missing balance-sheet / CF data is treated as "skip" not "fail"
+    skip_if_no_equity_data: bool = True
+    skip_if_no_ocf_data: bool = True
+    # When True, financial sector stocks (banks, insurance, etc.) are excluded entirely
+    exclude_financial_sector: bool = False
 
 
 def _is_nan(v):
@@ -65,6 +71,7 @@ def screen_from_raw(symbol: str, raw: dict, cfg: ScreenerConfig) -> dict:
         "roe": raw.get("roe"),
         "dividend_history": raw.get("dividend_history", pd.Series(dtype=float)),
         "operatingCashflow_3y": raw.get("operatingCashflow_3y", []),
+        "operatingCashflow_years": raw.get("operatingCashflow_years", []),
         "status": "passed",
         "stage": None,
         "reason": None,
@@ -72,15 +79,28 @@ def screen_from_raw(symbol: str, raw: dict, cfg: ScreenerConfig) -> dict:
 
     sector = base["sector"]
     is_financial = any(fs in sector for fs in FINANCIAL_SECTORS)
+    base["is_financial"] = is_financial
+
+    # ── Financial sector exclusion (optional) ─────────────────────────
+    if is_financial and cfg.exclude_financial_sector:
+        base.update(
+            status="failed",
+            stage="金融セクター除外",
+            reason=f"金融セクター（{sector}）のため除外",
+        )
+        return base
 
     # ── Layer 1: 財務の鉄壁 ────────────────────────────────────────────
-    # 1a. Equity ratio (skip for financial sector)
+    # 1a. Equity ratio (skip for financial sector — their leverage model differs)
     if not is_financial:
         eq_ratio = base["equityRatio"]
         if _is_nan(eq_ratio):
-            base.update(status="failed", stage="自己資本比率", reason="自己資本比率データなし")
-            return base
-        if eq_ratio < cfg.equity_ratio_min:
+            if cfg.skip_if_no_equity_data:
+                base["_warn_equity"] = "自己資本比率データなし（スキップ）"
+            else:
+                base.update(status="failed", stage="自己資本比率", reason="自己資本比率データなし")
+                return base
+        elif eq_ratio < cfg.equity_ratio_min:
             base.update(
                 status="failed",
                 stage="自己資本比率",
@@ -91,9 +111,12 @@ def screen_from_raw(symbol: str, raw: dict, cfg: ScreenerConfig) -> dict:
     # 1b. Operating CF — must be positive for all available years (up to 3)
     ocf_3y = base["operatingCashflow_3y"]
     if len(ocf_3y) == 0:
-        base.update(status="failed", stage="営業CF", reason="営業CFデータなし")
-        return base
-    if any(v <= 0 for v in ocf_3y if v is not None):
+        if cfg.skip_if_no_ocf_data:
+            base["_warn_ocf"] = "営業CFデータなし（スキップ）"
+        else:
+            base.update(status="failed", stage="営業CF", reason="営業CFデータなし")
+            return base
+    elif any(v <= 0 for v in ocf_3y if v is not None):
         base.update(
             status="failed",
             stage="営業CF",
@@ -146,7 +169,12 @@ def screen_from_raw(symbol: str, raw: dict, cfg: ScreenerConfig) -> dict:
     # 2c. No dividend cuts check
     div_hist = base["dividend_history"]
     if isinstance(div_hist, pd.Series) and len(div_hist) >= 3:
-        recent = div_hist.sort_index(ascending=True).tail(cfg.dividend_history_years)
+        current_year = date.today().year
+        # Exclude current year: partial-year totals look like huge cuts (false positive)
+        hist_excl_current = div_hist[div_hist.index < current_year]
+        if hist_excl_current.empty:
+            hist_excl_current = div_hist
+        recent = hist_excl_current.sort_index(ascending=True).tail(cfg.dividend_history_years)
         vals = recent.values
         # Check for any year-over-year cut > 5%
         for i in range(1, len(vals)):

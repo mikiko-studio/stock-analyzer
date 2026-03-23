@@ -4,9 +4,6 @@ pages/1_🎯_dividend_screener.py
 市場・セクター選択で自動銘柄リスト取得、手動追加も可能
 """
 
-import io
-import time
-
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -19,7 +16,7 @@ from utils.constants import (
     JP_DIVIDEND_STOCKS_BY_SECTOR,
 )
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
-from utils.ui_helpers import format_pct, format_currency, hero_header, status_badge_html
+from utils.ui_helpers import format_pct, format_currency, hero_header, status_badge_html, render_export_buttons
 
 st.set_page_config(page_title="高配当スクリーナー", page_icon="🎯", layout="wide")
 
@@ -131,7 +128,7 @@ with st.sidebar:
                                   help="金融セクターはスキップ")
 
     st.subheader("Layer 2: 配当の誠実さ")
-    dy_min = st.slider("配当利回り 下限 (%)", 0.0, 10.0, 3.0, 0.5, format="%.1f%%")
+    dy_min = st.slider("配当利回り 下限 (%)", 0.0, 10.0, 2.0, 0.5, format="%.1f%%")
     dy_max = st.slider("配当利回り 上限（罠配当除外）(%)", 0.0, 20.0, 10.0, 0.5, format="%.1f%%")
     pr_min = st.slider("配当性向 下限 (%)", 0, 100, 0, 5, format="%d%%")
     pr_max = st.slider("配当性向 上限 (%)", 0, 100, 80, 5, format="%d%%")
@@ -139,6 +136,27 @@ with st.sidebar:
     st.subheader("Layer 3: 稼ぐ力")
     om_min = st.slider("営業利益率 最低基準 (%)", 0, 30, 5, 1, format="%d%%")
     roe_min = st.slider("ROE 最低基準 (%)", 0, 30, 8, 1, format="%d%%")
+
+    st.divider()
+    st.subheader("🔧 データ欠損の扱い")
+    skip_no_equity = st.checkbox(
+        "自己資本比率データなし → スキップ（不合格にしない）",
+        value=True,
+        help="yfinanceでバランスシートが取得できない銘柄を脱落させない。日本株で推奨。",
+    )
+    skip_no_ocf = st.checkbox(
+        "営業CFデータなし → スキップ（不合格にしない）",
+        value=True,
+        help="yfinanceでキャッシュフロー計算書が取得できない銘柄を脱落させない。日本株で推奨。",
+    )
+
+    st.subheader("🏦 金融セクターの扱い")
+    st.caption("銀行・保険・証券などは自己資本比率チェックが免除されます（業種特性のため）")
+    exclude_financial = st.checkbox(
+        "金融セクターをスクリーニングから除外する",
+        value=False,
+        help="銀行・保険・証券などをスクリーニング対象から外します。自己資本比率を厳格に適用したい場合はONにしてください。",
+    )
 
     st.divider()
     run_button = st.button("🚀 スクリーニング実行", type="primary", use_container_width=True,
@@ -160,6 +178,9 @@ cfg = ScreenerConfig(
     payout_ratio_max=pr_max / 100,
     operating_margin_min=om_min / 100,
     roe_min=roe_min / 100,
+    skip_if_no_equity_data=skip_no_equity,
+    skip_if_no_ocf_data=skip_no_ocf,
+    exclude_financial_sector=exclude_financial,
 )
 
 # ── 3-Layer Explanation Cards ────────────────────────────────────────────────
@@ -177,7 +198,7 @@ with st.expander("📖 3層フィルターについて", expanded=False):
 **💝 Layer 2: 配当の誠実さ**
 - 配当利回り 3.75〜8%
 - 配当性向 30〜70%
-- 過去10年 減配なし
+- 過去5年 減配なし（当年除く）
 → 配当の持続可能性チェック
 """)
     with c3:
@@ -266,6 +287,77 @@ if run_button or "screener_results" in st.session_state:
     m3.metric("❌ 不合格", len(failed))
     m4.metric("⚠️ エラー", len(errors))
 
+    # ── Layer-by-layer breakdown ──────────────────────────────────────────────
+    LAYER_STAGES = {
+        "Layer 1a: 自己資本比率": "自己資本比率",
+        "Layer 1b: 営業CF":       "営業CF",
+        "Layer 2a: 配当利回り":   "配当利回り",
+        "Layer 2b: 配当性向":     "配当性向",
+        "Layer 2c: 減配チェック": "減配チェック",
+        "Layer 3a: 営業利益率":   "営業利益率",
+        "Layer 3b: ROE":          "ROE",
+    }
+    total_valid = len(results) - len(errors)
+    remaining = total_valid
+    layer_rows = []
+    for label, stage_key in LAYER_STAGES.items():
+        eliminated = sum(1 for r in results if r.get("stage") == stage_key and r["status"] == "failed")
+        layer_rows.append({
+            "フィルター": label,
+            "この段階で脱落": eliminated,
+            "残銘柄数": remaining,
+        })
+        remaining -= eliminated
+    layer_rows.append({"フィルター": "✅ 合格", "この段階で脱落": 0, "残銘柄数": len(passed)})
+
+    with st.expander("📊 Layer別 通過数ログ（0件のとき必ず確認）", expanded=(len(passed) == 0)):
+        st.dataframe(pd.DataFrame(layer_rows), use_container_width=True, hide_index=True)
+
+        # Highlight biggest elimination stage
+        if failed:
+            biggest = max(
+                LAYER_STAGES.keys(),
+                key=lambda lbl: sum(
+                    1 for r in results
+                    if r.get("stage") == LAYER_STAGES[lbl] and r["status"] == "failed"
+                )
+            )
+            biggest_count = sum(
+                1 for r in results
+                if r.get("stage") == LAYER_STAGES[biggest] and r["status"] == "failed"
+            )
+            if biggest_count > 0:
+                st.warning(f"最大脱落: **{biggest}** で {biggest_count} 件脱落。フィルター条件を緩めるか「データ欠損の扱い」設定を確認してください。")
+
+        # Data diagnosis: show raw field values for first 5 tickers
+        st.markdown("**🔬 生データ診断（先頭5銘柄）**")
+        diag_rows = []
+        for r in results[:5]:
+            sym = r["ticker"]
+            raw = _cached_fetch(sym)
+            if raw:
+                dy = raw.get("dividendYield")
+                pr = raw.get("payoutRatio")
+                eq = raw.get("equityRatio")
+                om = raw.get("operatingMargin")
+                roe_val = raw.get("roe")
+                ocf = raw.get("operatingCashflow_3y", [])
+                diag_rows.append({
+                    "銘柄": sym,
+                    "dividendYield": f"{dy:.4f} ({dy*100:.2f}%)" if dy is not None else "None",
+                    "payoutRatio": f"{pr:.4f}" if pr is not None else "None",
+                    "equityRatio": f"{eq:.4f}" if eq is not None else "None ⚠️",
+                    "operatingMargin": f"{om:.4f}" if om is not None else "None",
+                    "ROE": f"{roe_val:.4f}" if roe_val is not None else "None",
+                    "OCF件数": len(ocf) if ocf else "0 ⚠️",
+                })
+            else:
+                diag_rows.append({"銘柄": sym, "dividendYield": "取得失敗", "payoutRatio": "—",
+                                   "equityRatio": "—", "operatingMargin": "—", "ROE": "—", "OCF件数": "—"})
+        if diag_rows:
+            st.dataframe(pd.DataFrame(diag_rows), use_container_width=True, hide_index=True)
+            st.caption("⚠️ マークは yfinance から取得できなかったフィールド。「データ欠損の扱い」でスキップに設定してください。")
+
     # ── Tabs ────────────────────────────────────────────────────────────────
     tab1, tab2, tab3, tab4 = st.tabs(["🏆 合格銘柄", "📉 フィルター分析", "📊 チャート", "📋 全銘柄ログ"])
 
@@ -280,22 +372,96 @@ if run_button or "screener_results" in st.session_state:
                 "株価": format_currency(r.get("price"), r.get("currency", "JPY")),
                 "配当利回り": format_pct(r.get("dividendYield")),
                 "配当性向": format_pct(r.get("payoutRatio")),
-                "自己資本比率": format_pct(r.get("equityRatio")),
+                "自己資本比率": (
+                    "🏦 免除（金融業）" if r.get("is_financial")
+                    else ("⚠️ データなし" if r.get("equityRatio") is None
+                          else format_pct(r.get("equityRatio")))
+                ),
                 "営業利益率": format_pct(r.get("operatingMargin")),
                 "ROE": format_pct(r.get("roe")),
             } for r in passed])
 
             st.dataframe(df_pass, use_container_width=True, hide_index=True)
 
-            # CSV download
-            csv_buf = io.StringIO()
-            df_pass.to_csv(csv_buf, index=False, encoding="utf-8-sig")
-            st.download_button(
-                "📥 CSVダウンロード",
-                csv_buf.getvalue().encode("utf-8-sig"),
-                "dividend_screener_passed.csv",
-                "text/csv",
+            # Export buttons (CSV + Excel) using raw numeric values
+            df_pass_export = pd.DataFrame([{
+                "銘柄": r["ticker"],
+                "会社名": r.get("name", ""),
+                "セクター": r.get("sector", ""),
+                "市場": r.get("market", ""),
+                "株価": r.get("price"),
+                "通貨": r.get("currency", "JPY"),
+                "配当利回り": r.get("dividendYield"),
+                "配当性向": r.get("payoutRatio"),
+                "自己資本比率": r.get("equityRatio"),
+                "営業利益率": r.get("operatingMargin"),
+                "ROE": r.get("roe"),
+            } for r in passed])
+            render_export_buttons(
+                df_pass_export,
+                filename_prefix="dividend_screener",
+                pct_cols=["配当利回り", "配当性向", "自己資本比率", "営業利益率", "ROE"],
+                float2_cols=["株価"],
             )
+
+            # OCF trend expander
+            with st.expander("💹 営業キャッシュフロー推移（直近3年）"):
+                has_any_ocf = any(r.get("operatingCashflow_3y") for r in passed)
+                if not has_any_ocf:
+                    st.info("営業CFデータが取得できた銘柄がありませんでした。")
+                else:
+                    ocf_cols = st.columns(min(len(passed), 3))
+                    for idx, r in enumerate(passed):
+                        ocf_vals = r.get("operatingCashflow_3y", [])
+                        ocf_yrs = r.get("operatingCashflow_years", [])
+                        if not ocf_vals:
+                            continue
+
+                        # Reverse so chart reads oldest → newest (left → right)
+                        ocf_vals_disp = list(reversed(ocf_vals))
+                        ocf_yrs_disp = list(reversed(ocf_yrs)) if ocf_yrs else [
+                            f"{len(ocf_vals) - i}年前" if i > 0 else "直近"
+                            for i in range(len(ocf_vals) - 1, -1, -1)
+                        ]
+
+                        # Unit: convert to 億円 (JP) or 億ドル (US)
+                        currency = r.get("currency", "JPY")
+                        unit_divisor = 1e8 if currency == "JPY" else 1e8
+                        unit_label = "億円" if currency == "JPY" else "億USD"
+                        ocf_unit = [v / unit_divisor for v in ocf_vals_disp]
+
+                        # Trend color: green if latest ≥ oldest, else red
+                        trend_up = ocf_vals_disp[-1] >= ocf_vals_disp[0]
+                        bar_colors = [
+                            "#22c55e" if trend_up else "#ef4444"
+                        ] * len(ocf_unit)
+
+                        fig_ocf = go.Figure(go.Bar(
+                            x=ocf_yrs_disp,
+                            y=ocf_unit,
+                            marker_color=bar_colors,
+                            text=[f"{v:.0f}" for v in ocf_unit],
+                            textposition="outside",
+                        ))
+                        fig_ocf.update_layout(
+                            title=f"{r['ticker']} {r.get('name', '')[:10]}",
+                            yaxis_title=unit_label,
+                            height=260,
+                            margin=dict(t=40, b=10, l=10, r=10),
+                            showlegend=False,
+                        )
+
+                        with ocf_cols[idx % 3]:
+                            st.plotly_chart(fig_ocf, use_container_width=True)
+                            # Trend annotation
+                            if len(ocf_vals_disp) >= 2:
+                                change_pct = (ocf_vals_disp[-1] / ocf_vals_disp[0] - 1) * 100
+                                arrow = "↑" if change_pct >= 0 else "↓"
+                                color = "green" if change_pct >= 0 else "red"
+                                st.markdown(
+                                    f"<small style='color:{color}'>{arrow} {abs(change_pct):.1f}%（{ocf_yrs_disp[0]}→{ocf_yrs_disp[-1]}）</small>",
+                                    unsafe_allow_html=True,
+                                )
 
             # Dividend history expander
             with st.expander("📈 配当履歴（合格銘柄）"):

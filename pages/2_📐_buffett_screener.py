@@ -9,7 +9,7 @@ import streamlit as st
 
 from utils.constants import JP_STOCKS, SECTOR_PE_JP, SECTOR_PE_US, US_STOCKS
 from utils.data_fetcher import fetch_with_cache_flag
-from utils.ui_helpers import format_pct, format_currency, hero_header, score_color
+from utils.ui_helpers import format_pct, format_currency, hero_header, score_color, render_export_buttons
 
 st.set_page_config(page_title="三角測量スクリーナー", page_icon="📐", layout="wide")
 
@@ -358,6 +358,31 @@ P/E: {r['pe_score']:+d} | DCF: {r['dcf_score']:+d} | GDM: {r['gdm_score']:+d}<br
             "期待CAGR": format_pct(r.get("cagr")),
         } for r in results])
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # Export buttons (always shown, uses raw numeric values)
+    df_export = pd.DataFrame([{
+        "銘柄": r["symbol"],
+        "会社名": r["name"],
+        "セクター": r["sector"],
+        "株価": r.get("price"),
+        "通貨": r.get("currency", "USD"),
+        "P/E": r.get("pe"),
+        "P/E評価": r["pe_score"],
+        "DCF評価": r["dcf_score"],
+        "GDM評価": r["gdm_score"],
+        "総合スコア": r["composite"],
+        "成長率(推定)": r.get("growth"),
+        "期待CAGR": r.get("cagr"),
+        "配当利回り": r.get("div_yield"),
+        "内在価値(DCF)": r.get("dcf_value"),
+        "グレアム価値(GDM)": r.get("gdm_value"),
+    } for r in results])
+    render_export_buttons(
+        df_export,
+        filename_prefix="buffett_screener",
+        pct_cols=["成長率(推定)", "期待CAGR", "配当利回り"],
+        float2_cols=["株価", "P/E", "内在価値(DCF)", "グレアム価値(GDM)"],
+    )
 
     # ── Stock Detail (user selects from table) ────────────────────────────────
     st.subheader("🔍 銘柄詳細分析")

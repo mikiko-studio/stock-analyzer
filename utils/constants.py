@@ -179,6 +179,7 @@ WATCH_LIST_US = [
 # Filter stage names for dividend screener
 FILTER_STAGES = [
     "基本情報",
+    "金融セクター除外",
     "自己資本比率",
     "営業CF",
     "配当利回り",

@@ -28,6 +28,22 @@ def _safe_get(info, key, default=None):
     return val
 
 
+def _normalize_yield(value) -> float | None:
+    """Normalize dividendYield to decimal form (0.0–1.0).
+
+    yfinance 1.x returns dividendYield as a percentage value (e.g. 4.18 for 4.18%).
+    Older versions returned a decimal (0.0418).  Any value > 1.0 is assumed to be
+    in percentage form and is divided by 100.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+        return v / 100 if v > 1.0 else v
+    except (TypeError, ValueError):
+        return None
+
+
 def _calc_rsi(close_series, period=14):
     """Calculate RSI for a given close price series."""
     try:
@@ -54,29 +70,40 @@ def _calc_ma_deviation(close_series, window=25):
 
 
 def _get_equity_ratio(ticker_obj):
-    """Calculate equity ratio from balance sheet."""
+    """Calculate equity ratio from balance sheet.
+    Tries multiple field name variants across yfinance versions.
+    """
     try:
         bs = ticker_obj.balance_sheet
         if bs is None or bs.empty:
             return None
-        # Try different field names
+        # Expanded key list for yfinance 0.1.x / 0.2.x / newer
         equity_keys = [
-            "Stockholders Equity", "Total Stockholder Equity",
-            "Common Stock Equity", "Total Equity Gross Minority Interest"
+            "Stockholders Equity",
+            "Total Stockholder Equity",
+            "Common Stock Equity",
+            "Total Equity Gross Minority Interest",
+            "Stockholders' Equity",
+            "Total Shareholders Equity",
         ]
         asset_keys = [
-            "Total Assets", "Total Assets"
+            "Total Assets",
+            "Total Asset",
         ]
         equity = None
         for k in equity_keys:
             if k in bs.index:
-                equity = float(bs.loc[k].iloc[0])
-                break
+                v = bs.loc[k].iloc[0]
+                if v is not None and not np.isnan(float(v)):
+                    equity = float(v)
+                    break
         total_assets = None
         for k in asset_keys:
             if k in bs.index:
-                total_assets = float(bs.loc[k].iloc[0])
-                break
+                v = bs.loc[k].iloc[0]
+                if v is not None and not np.isnan(float(v)):
+                    total_assets = float(v)
+                    break
         if equity is not None and total_assets and total_assets != 0:
             return equity / total_assets
         return None
@@ -85,19 +112,36 @@ def _get_equity_ratio(ticker_obj):
 
 
 def _get_operating_cashflow_3y(ticker_obj):
-    """Get last 3 years of operating cash flow."""
-    try:
-        cf = ticker_obj.cashflow
-        if cf is None or cf.empty:
-            return []
-        keys = ["Operating Cash Flow", "Total Cash From Operating Activities"]
-        for k in keys:
-            if k in cf.index:
-                vals = cf.loc[k].dropna()
-                return [float(v) for v in vals.iloc[:3]]
-        return []
-    except Exception:
-        return []
+    """Get last 3 years of operating cash flow.
+    Returns (values_list, years_list).
+    Falls back from .cashflow to .cash_flow for newer yfinance versions.
+    """
+    for cf_attr in ("cashflow", "cash_flow"):
+        try:
+            cf = getattr(ticker_obj, cf_attr, None)
+            if cf is None or (hasattr(cf, "empty") and cf.empty):
+                continue
+            keys = [
+                "Operating Cash Flow",
+                "Total Cash From Operating Activities",
+                "Cash From Operating Activities",
+            ]
+            for k in keys:
+                if k in cf.index:
+                    row = cf.loc[k].dropna()
+                    pairs = [
+                        (col, float(v))
+                        for col, v in row.iloc[:3].items()
+                        if not np.isnan(float(v))
+                    ]
+                    if pairs:
+                        # cols are Timestamps; extract year string
+                        years = [str(pd.Timestamp(col).year) for col, _ in pairs]
+                        values = [v for _, v in pairs]
+                        return values, years
+        except Exception:
+            continue
+    return [], []
 
 
 def _get_cash_3y(ticker_obj):
@@ -183,7 +227,7 @@ def _cached_fetch(symbol: str) -> dict | None:
         equity_ratio = _get_equity_ratio(ticker)
 
         # Operating cash flow
-        ocf_3y = _get_operating_cashflow_3y(ticker)
+        ocf_3y, ocf_years = _get_operating_cashflow_3y(ticker)
 
         # Cash
         cash_3y = _get_cash_3y(ticker)
@@ -240,7 +284,9 @@ def _cached_fetch(symbol: str) -> dict | None:
             "revenueGrowth": _safe_get(info, "revenueGrowth"),
             "earningsGrowth": _safe_get(info, "earningsGrowth"),
             # Dividends
-            "dividendYield": _safe_get(info, "dividendYield"),
+            # yfinance 1.x returns dividendYield as a percentage (e.g. 4.18 for 4.18%).
+            # Normalize to decimal (0.0418) so screener thresholds are consistent.
+            "dividendYield": _normalize_yield(_safe_get(info, "dividendYield")),
             "dividendRate": _safe_get(info, "dividendRate"),
             "payoutRatio": _safe_get(info, "payoutRatio"),
             "dividend_history": div_history,
@@ -249,6 +295,7 @@ def _cached_fetch(symbol: str) -> dict | None:
             "operatingMargin": _safe_get(info, "operatingMargins"),
             "roe": _safe_get(info, "returnOnEquity"),
             "operatingCashflow_3y": ocf_3y,
+            "operatingCashflow_years": ocf_years,
             "cashAndEquivalents_3y": cash_3y,
             # Technical
             "rsi14": rsi14,
