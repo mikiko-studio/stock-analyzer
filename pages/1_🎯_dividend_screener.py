@@ -18,8 +18,6 @@ from utils.constants import (
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, status_badge_html, render_export_buttons
 
-st.set_page_config(page_title="高配当スクリーナー", page_icon="🎯", layout="wide")
-
 hero_header("高配当スクリーナー", "3層フィルターで選ぶ「鉄壁高配当株」", "🎯")
 
 

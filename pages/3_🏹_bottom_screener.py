@@ -15,8 +15,6 @@ from utils.constants import WATCH_LIST_JP, WATCH_LIST_US
 from utils.data_fetcher import fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, render_export_buttons
 
-st.set_page_config(page_title="シグナル・ハンター", page_icon="🏹", layout="wide")
-
 hero_header("シグナル・ハンター", "テクニカル分析 × ニュース解析による押し目買い判定", "🏹")
 
 # ── News pattern matching ─────────────────────────────────────────────────────

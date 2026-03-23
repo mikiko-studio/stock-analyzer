@@ -11,8 +11,6 @@ from utils.constants import JP_STOCKS, SECTOR_PE_JP, SECTOR_PE_US, US_STOCKS
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, score_color, render_export_buttons
 
-st.set_page_config(page_title="三角測量スクリーナー", page_icon="📐", layout="wide")
-
 hero_header("三角測量スクリーナー", "P/E・DCF・GDM 3手法による割安銘柄発見", "📐")
 
 # ── スクリーニング基準の説明 ───────────────────────────────────────────────────

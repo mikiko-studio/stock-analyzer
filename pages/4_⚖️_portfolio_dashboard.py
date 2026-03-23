@@ -15,8 +15,6 @@ import streamlit as st
 from utils.constants import ASSET_EXPECTED_RETURNS
 from utils.ui_helpers import hero_header, format_currency
 
-st.set_page_config(page_title="ポートフォリオ診断", page_icon="⚖️", layout="wide")
-
 hero_header("ポートフォリオ診断", "年齢・リスク許容度に基づく資産配分最適化", "⚖️")
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
