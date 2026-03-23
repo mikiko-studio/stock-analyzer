@@ -55,7 +55,11 @@ def get_us_sectors_fallback() -> dict[str, list[str]]:
 with st.sidebar:
     st.header("⚙️ スクリーナー設定")
 
-    market_sel = st.radio("マーケット", ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"], horizontal=True)
+    # グローバル設定から初期値を引き継ぐ
+    _market_opts = ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]
+    _g_market = st.session_state.get("global_market", "🇯🇵 日本株")
+    _market_idx = _market_opts.index(_g_market) if _g_market in _market_opts else 0
+    market_sel = st.radio("マーケット", _market_opts, index=_market_idx, horizontal=True)
 
     st.subheader("銘柄選択")
 
@@ -66,10 +70,13 @@ with st.sidebar:
         if market_sel == "🌐 両方":
             st.markdown("**🇯🇵 日本株 セクター**")
         all_jp_sectors = list(JP_DIVIDEND_STOCKS_BY_SECTOR.keys())
+        # グローバル設定から日本株セクターの初期値を引き継ぐ
+        _g_jp = st.session_state.get("global_jp_sectors", all_jp_sectors[:4])
+        _valid_jp = [s for s in _g_jp if s in all_jp_sectors] or all_jp_sectors[:4]
         jp_selected = st.multiselect(
             "日本株セクターを選択",
             options=all_jp_sectors,
-            default=all_jp_sectors[:4],
+            default=_valid_jp,
             help="選択したセクターの銘柄が自動でスクリーニング対象になります",
             label_visibility="collapsed" if market_sel == "🌐 両方" else "visible",
         )
@@ -124,17 +131,17 @@ with st.sidebar:
         st.warning("銘柄が0件です。セクターを選択するか、手動で入力してください。")
 
     st.subheader("Layer 1: 財務の鉄壁")
-    equity_ratio_min = st.slider("自己資本比率 最低基準 (%)", 0, 80, 30, 5, format="%d%%",
+    equity_ratio_min = st.slider("自己資本比率 最低基準 (%)", 0, 80, 40, 5, format="%d%%",
                                   help="金融セクターはスキップ")
 
     st.subheader("Layer 2: 配当の誠実さ")
-    dy_min = st.slider("配当利回り 下限 (%)", 0.0, 10.0, 2.0, 0.5, format="%.1f%%")
-    dy_max = st.slider("配当利回り 上限（罠配当除外）(%)", 0.0, 20.0, 10.0, 0.5, format="%.1f%%")
-    pr_min = st.slider("配当性向 下限 (%)", 0, 100, 0, 5, format="%d%%")
-    pr_max = st.slider("配当性向 上限 (%)", 0, 100, 80, 5, format="%d%%")
+    dy_min = st.slider("配当利回り 下限 (%)", 0.0, 10.0, 3.5, 0.5, format="%.1f%%")
+    dy_max = st.slider("配当利回り 上限（罠配当除外）(%)", 0.0, 20.0, 8.0, 0.5, format="%.1f%%")
+    pr_min = st.slider("配当性向 下限 (%)", 0, 100, 30, 5, format="%d%%")
+    pr_max = st.slider("配当性向 上限 (%)", 0, 100, 70, 5, format="%d%%")
 
     st.subheader("Layer 3: 稼ぐ力")
-    om_min = st.slider("営業利益率 最低基準 (%)", 0, 30, 5, 1, format="%d%%")
+    om_min = st.slider("営業利益率 最低基準 (%)", 0, 30, 10, 1, format="%d%%")
     roe_min = st.slider("ROE 最低基準 (%)", 0, 30, 8, 1, format="%d%%")
 
     st.divider()
@@ -365,21 +372,49 @@ if run_button or "screener_results" in st.session_state:
         if not passed:
             st.warning("合格銘柄がありませんでした。フィルター条件を緩めてみてください。")
         else:
-            df_pass = pd.DataFrame([{
-                "銘柄": r["ticker"],
-                "会社名": r.get("name", "")[:12],
-                "セクター": r.get("sector", ""),
-                "株価": format_currency(r.get("price"), r.get("currency", "JPY")),
-                "配当利回り": format_pct(r.get("dividendYield")),
-                "配当性向": format_pct(r.get("payoutRatio")),
-                "自己資本比率": (
-                    "🏦 免除（金融業）" if r.get("is_financial")
-                    else ("⚠️ データなし" if r.get("equityRatio") is None
-                          else format_pct(r.get("equityRatio")))
-                ),
-                "営業利益率": format_pct(r.get("operatingMargin")),
-                "ROE": format_pct(r.get("roe")),
-            } for r in passed])
+            # テクニカル指標を取得（キャッシュ済みデータから、1銘柄1回のみ）
+            def _get_tech(ticker_sym):
+                raw = _cached_fetch(ticker_sym)
+                if raw is None:
+                    return None, None, None, "—"
+                rsi = raw.get("rsi14")
+                ma_dev = raw.get("ma25DeviationPct")
+                price = raw.get("price")
+                high_52w = raw.get("fifty_two_week_high")
+                from_high = (
+                    (price - high_52w) / high_52w * 100
+                    if price and high_52w and high_52w > 0 else None
+                )
+                signal = (
+                    "🟢 買い"
+                    if (rsi is not None and rsi < 35 and ma_dev is not None and ma_dev < -3)
+                    else "⬜"
+                )
+                return rsi, ma_dev, from_high, signal
+
+            pass_rows = []
+            for r in passed:
+                rsi_v, ma_v, high_v, sig_v = _get_tech(r["ticker"])
+                pass_rows.append({
+                    "銘柄": r["ticker"],
+                    "会社名": r.get("name", "")[:12],
+                    "セクター": r.get("sector", ""),
+                    "株価": format_currency(r.get("price"), r.get("currency", "JPY")),
+                    "配当利回り": format_pct(r.get("dividendYield")),
+                    "配当性向": format_pct(r.get("payoutRatio")),
+                    "自己資本比率": (
+                        "🏦 免除（金融業）" if r.get("is_financial")
+                        else ("⚠️ データなし" if r.get("equityRatio") is None
+                              else format_pct(r.get("equityRatio")))
+                    ),
+                    "営業利益率": format_pct(r.get("operatingMargin")),
+                    "ROE": format_pct(r.get("roe")),
+                    "RSI(14)": f"{rsi_v:.1f}" if rsi_v is not None else "—",
+                    "25日MA乖離率": f"{ma_v:.1f}%" if ma_v is not None else "—",
+                    "52週高値比": f"{high_v:.1f}%" if high_v is not None else "—",
+                    "テクシグナル": sig_v,
+                })
+            df_pass = pd.DataFrame(pass_rows)
 
             st.dataframe(df_pass, use_container_width=True, hide_index=True)
 

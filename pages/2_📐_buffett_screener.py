@@ -8,12 +8,60 @@ import pandas as pd
 import streamlit as st
 
 from utils.constants import JP_STOCKS, SECTOR_PE_JP, SECTOR_PE_US, US_STOCKS
-from utils.data_fetcher import fetch_with_cache_flag
+from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, score_color, render_export_buttons
 
 st.set_page_config(page_title="三角測量スクリーナー", page_icon="📐", layout="wide")
 
 hero_header("三角測量スクリーナー", "P/E・DCF・GDM 3手法による割安銘柄発見", "📐")
+
+# ── スクリーニング基準の説明 ───────────────────────────────────────────────────
+with st.expander("📖 三角測量スクリーニングについて", expanded=False):
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("""
+**📊 P/E 分析（株価収益率）**
+- 実績P/Eをセクター平均と比較
+- P/E < セクター平均×60% → **+2点（大幅割安）**
+- P/E < セクター平均×80% → +1点
+- P/E ≈ セクター平均 → 0点
+- P/E > セクター平均×130% → **-2点（大幅割高）**
+
+→ 同業他社と比較した「市場評価」のチェック
+""")
+    with c2:
+        st.markdown("""
+**💰 DCF 分析（割引キャッシュフロー）**
+- EPS × 成長率で10年分の将来キャッシュを試算
+- 割引率9%で現在価値に換算
+- 安全マージン > 30% → **+2点**
+- 安全マージン > 10% → +1点
+- 安全マージン < -30% → **-2点**
+
+→ 「内在価値」に対して今の株価が割安かどうかを判定
+""")
+    with c3:
+        st.markdown("""
+**📐 GDM 分析（グレアム防衛モデル）**
+- EPS × (8.5 + 2×成長率) × 4.4 ÷ 債券利回り
+- ベンジャミン・グレアムの古典的公式に基づく保守的評価
+- グレアム価値比 > 30% → **+2点**
+- グレアム価値比 > 10% → +1点
+- グレアム価値比 < -30% → **-2点**
+
+→ 保守的投資家視点の「下値リスク」チェック
+""")
+    st.markdown("""
+---
+**総合スコア = P/E評価 + DCF評価 + GDM評価（-6〜+6点）**
+
+| スコア | 判定 | 意味 |
+|--------|------|------|
+| 5〜6点 | 🔥 強い買い | 3手法すべてで割安。強い買い候補 |
+| 4点 | ✅ 買い | 複数手法で割安。買いを検討できる水準 |
+| 2〜3点 | 👀 様子見 | 一部では割安だが慎重に判断 |
+| 1点以下 | ⚠️ 見送り | 割高感あり。新規買いは見送り |
+""")
 
 # ── Constants ────────────────────────────────────────────────────────────────
 DISCOUNT_RATE = 0.09
@@ -35,7 +83,10 @@ GROWTH_CAPS = {
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ スクリーナー設定")
-    market = st.radio("マーケット", ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"], horizontal=True)
+    _market_opts = ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]
+    _g_market = st.session_state.get("global_market", "🇯🇵 日本株")
+    _market_idx = _market_opts.index(_g_market) if _g_market in _market_opts else 0
+    market = st.radio("マーケット", _market_opts, index=_market_idx, horizontal=True)
 
     if market == "🌐 両方":
         max_jp = st.slider("日本株 分析銘柄数", 5, len(JP_STOCKS), min(15, len(JP_STOCKS)), 5)
@@ -191,6 +242,40 @@ def analyze_stock(stock_info, data, sector_pe_jp=SECTOR_PE_JP, sector_pe_us=SECT
     }
 
 
+# ── Buy Signal Icon & Technical Data ─────────────────────────────────────────
+def get_signal_icon(composite: int) -> str:
+    """Return a visual buy signal icon based on composite score (out of 6)."""
+    if composite >= 5:
+        return "🔥 強い買い"
+    elif composite >= 4:
+        return "✅ 買い"
+    elif composite >= 2:
+        return "👀 様子見"
+    else:
+        return "⚠️ 見送り"
+
+
+def get_bottom_indicators(symbol: str) -> dict:
+    """Fetch bottom_screener indicators from cached data."""
+    raw = _cached_fetch(symbol)
+    if raw is None:
+        return {"rsi14": None, "ma25_dev": None, "from_high": None, "tech_signal": "—"}
+    rsi = raw.get("rsi14")
+    ma_dev = raw.get("ma25DeviationPct")
+    price = raw.get("price")
+    high_52w = raw.get("fifty_two_week_high")
+    from_high = (
+        (price - high_52w) / high_52w * 100
+        if price and high_52w and high_52w > 0 else None
+    )
+    tech_signal = (
+        "🟢 買い"
+        if (rsi is not None and rsi < 35 and ma_dev is not None and ma_dev < -3)
+        else "⬜"
+    )
+    return {"rsi14": rsi, "ma25_dev": ma_dev, "from_high": from_high, "tech_signal": tech_signal}
+
+
 # ── Metric Interpretation Helpers ────────────────────────────────────────────
 def interpret_pe(r: dict) -> str:
     pe = r.get("pe")
@@ -259,9 +344,10 @@ def interpret_gdm(r: dict) -> str:
 def render_stock_detail(r: dict, sector_pe_map_jp=SECTOR_PE_JP, sector_pe_map_us=SECTOR_PE_US):
     """Render detailed analysis for a selected stock."""
     color = score_color(r["composite"], 6)
+    signal_icon = get_signal_icon(r["composite"])
     st.markdown(
         f"<h4>{r['symbol']} — {r['name']} "
-        f"<span style='color:{color}'>総合スコア: {r['composite']}/6</span></h4>",
+        f"<span style='color:{color}'>総合スコア: {r['composite']}/6 &nbsp; {signal_icon}</span></h4>",
         unsafe_allow_html=True,
     )
 
@@ -335,28 +421,42 @@ if run_btn or session_key in st.session_state:
         for i, r in enumerate(results[:9]):
             with cols[i % 3]:
                 color = score_color(r["composite"], 6)
+                icon = get_signal_icon(r["composite"])
                 st.markdown(f"""
 <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px;margin:4px;
             border-left:4px solid {color};">
 <b>{r['symbol']}</b> {r['name'][:10]}<br>
-<span style="color:{color};font-size:1.4rem;font-weight:bold;">{r['composite']}/6</span><br>
+<span style="color:{color};font-size:1.4rem;font-weight:bold;">{r['composite']}/6</span>
+&nbsp;<span style="font-size:0.85rem;">{icon}</span><br>
 P/E: {r['pe_score']:+d} | DCF: {r['dcf_score']:+d} | GDM: {r['gdm_score']:+d}<br>
 株価: {format_currency(r['price'], r['currency'])}
 </div>
 """, unsafe_allow_html=True)
     else:
-        df = pd.DataFrame([{
-            "銘柄": r["symbol"],
-            "会社名": r["name"][:12],
-            "セクター": r["sector"][:8],
-            "株価": format_currency(r["price"], r["currency"]),
-            "P/E評価": r["pe_score"],
-            "DCF評価": r["dcf_score"],
-            "GDM評価": r["gdm_score"],
-            "総合スコア": r["composite"],
-            "成長率(推定)": format_pct(r.get("growth")),
-            "期待CAGR": format_pct(r.get("cagr")),
-        } for r in results])
+        tbl_rows = []
+        for r in results:
+            tech = get_bottom_indicators(r["symbol"])
+            rsi_v = tech["rsi14"]
+            ma_v = tech["ma25_dev"]
+            high_v = tech["from_high"]
+            tbl_rows.append({
+                "シグナル": get_signal_icon(r["composite"]),
+                "銘柄": r["symbol"],
+                "会社名": r["name"][:12],
+                "セクター": r["sector"][:8],
+                "株価": format_currency(r["price"], r["currency"]),
+                "P/E評価": r["pe_score"],
+                "DCF評価": r["dcf_score"],
+                "GDM評価": r["gdm_score"],
+                "総合スコア": r["composite"],
+                "成長率(推定)": format_pct(r.get("growth")),
+                "期待CAGR": format_pct(r.get("cagr")),
+                "RSI(14)": f"{rsi_v:.1f}" if rsi_v is not None else "—",
+                "25日MA乖離率": f"{ma_v:.1f}%" if ma_v is not None else "—",
+                "52週高値比": f"{high_v:.1f}%" if high_v is not None else "—",
+                "テクシグナル": tech["tech_signal"],
+            })
+        df = pd.DataFrame(tbl_rows)
         st.dataframe(df, use_container_width=True, hide_index=True)
 
     # Export buttons (always shown, uses raw numeric values)
