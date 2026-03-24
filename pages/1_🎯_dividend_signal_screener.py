@@ -18,7 +18,7 @@ from utils.constants import (
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
 from utils.ui_helpers import format_pct, format_currency, hero_header, status_badge_html, render_export_buttons
 
-hero_header("高配当スクリーナー", "3層フィルターで選ぶ「鉄壁高配当株」", "🎯")
+hero_header("高配当スクリーナー × シグナル・ハンター", "3層フィルター × テクニカル指標で選ぶ「鉄壁高配当株」", "🎯")
 
 
 # ── Auto-fetch S&P 500 by sector ─────────────────────────────────────────────
