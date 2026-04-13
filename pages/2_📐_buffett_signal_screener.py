@@ -382,8 +382,14 @@ def render_stock_detail(r: dict, sector_pe_map_jp=SECTOR_PE_JP, sector_pe_map_us
 # ── Main ─────────────────────────────────────────────────────────────────────
 session_key = f"buffett_results_{market}"
 
-if run_btn or session_key in st.session_state:
-    if run_btn:
+_auto_rerun_buf = st.session_state.pop("_auto_rerun_buffett", False)
+if _auto_rerun_buf and st.session_state.get("_last_stocks_buffett"):
+    stocks = st.session_state["_last_stocks_buffett"]
+
+_trigger_run_buf = run_btn or _auto_rerun_buf
+
+if _trigger_run_buf or session_key in st.session_state:
+    if _trigger_run_buf:
         results = []
         progress = st.progress(0, text="分析中...")
         target = stocks
@@ -396,6 +402,7 @@ if run_btn or session_key in st.session_state:
                 results.append(result)
         progress.empty()
         st.session_state[session_key] = results
+        st.session_state["_last_stocks_buffett"] = stocks
 
     results = st.session_state.get(session_key, [])
     if not results:

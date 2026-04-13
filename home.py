@@ -10,7 +10,6 @@ import datetime
 import pandas as pd
 import streamlit as st
 
-from utils.constants import JP_DIVIDEND_STOCKS_BY_SECTOR, US_STOCKS
 from utils.ui_helpers import score_color
 
 # ── ヘッダー & ツール説明 ──────────────────────────────────────────────────────
@@ -19,7 +18,7 @@ st.markdown("### 株式分析統合ツール — Japan & US Market")
 
 st.markdown("""
 日本・米国の株式市場から投資候補を多角的にスクリーニングするための分析ツールです。
-**財務健全性・配当・バリュエーション・テクニカル指標**を組み合わせることで、
+**財務健全性・配当・バリュエーション・テクニカル指標・J-REIT分析**を組み合わせることで、
 単一の視点では見落としがちな優良銘柄を効率よく発見できます。
 初心者から中級者の投資判断をサポートすることを目的としており、
 すべての分析結果は CSV / Excel / PDF 形式でダウンロードできます。
@@ -27,77 +26,10 @@ st.markdown("""
 
 st.divider()
 
-# ── Global Settings Panel ─────────────────────────────────────────────────────
-with st.expander("⚙️ グローバル設定（全スクリーナーに反映）", expanded=True):
-    g_col1, g_col2, g_col3 = st.columns([1, 2, 1])
-
-    with g_col1:
-        st.markdown("**マーケット選択**")
-        _market_opts = ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]
-        _saved_market = st.session_state.get("global_market", "🇯🇵 日本株")
-        _market_idx = _market_opts.index(_saved_market) if _saved_market in _market_opts else 0
-        global_market = st.radio(
-            "マーケット",
-            _market_opts,
-            index=_market_idx,
-            label_visibility="collapsed",
-            key="global_market_radio",
-        )
-        st.session_state["global_market"] = global_market
-
-    with g_col2:
-        all_jp_sectors = list(JP_DIVIDEND_STOCKS_BY_SECTOR.keys())
-        us_sector_list = sorted({s["sector"] for s in US_STOCKS})
-
-        if global_market in ["🇯🇵 日本株", "🌐 両方"]:
-            st.markdown("**🇯🇵 日本株セクター**")
-            _saved_jp = st.session_state.get("global_jp_sectors", all_jp_sectors[:4])
-            _valid_jp = [s for s in _saved_jp if s in all_jp_sectors] or all_jp_sectors[:4]
-            global_jp_sectors = st.multiselect(
-                "日本株セクター",
-                options=all_jp_sectors,
-                default=_valid_jp,
-                label_visibility="collapsed",
-                key="global_jp_sectors_ms",
-            )
-            st.session_state["global_jp_sectors"] = global_jp_sectors
-
-        if global_market in ["🇺🇸 米国株", "🌐 両方"]:
-            st.markdown("**🇺🇸 米国株セクター**")
-            _saved_us = st.session_state.get("global_us_sectors", us_sector_list[:3])
-            _valid_us = [s for s in _saved_us if s in us_sector_list] or us_sector_list[:3]
-            global_us_sectors = st.multiselect(
-                "米国株セクター",
-                options=us_sector_list,
-                default=_valid_us,
-                label_visibility="collapsed",
-                key="global_us_sectors_ms",
-            )
-            st.session_state["global_us_sectors"] = global_us_sectors
-
-    with g_col3:
-        st.markdown("**カスタム銘柄追加**")
-        custom_text = st.text_area(
-            "銘柄コード（1行1コード）",
-            value=st.session_state.get("global_custom_tickers_text", ""),
-            height=120,
-            placeholder="例:\n8058.T\nAAPL\n9433.T",
-            label_visibility="collapsed",
-            key="global_custom_text",
-        )
-        st.session_state["global_custom_tickers_text"] = custom_text
-        custom_tickers = [t.strip() for t in custom_text.strip().split("\n") if t.strip()]
-        st.session_state["global_custom_tickers"] = custom_tickers
-        if custom_tickers:
-            st.caption(f"＋ {len(custom_tickers)} 銘柄追加")
-        st.caption("設定はサイドバーの初期値として各スクリーナーに引き継がれます")
-
-st.divider()
-
 # ── Navigation Cards ──────────────────────────────────────────────────────────
-st.caption("👇 各スクリーナーの名称をクリックすると詳細分析画面に移動します")
+st.caption("👇 各ツールの名称をクリックすると詳細分析画面に移動します")
 
-nav_col1, nav_col2, nav_col3 = st.columns(3)
+nav_col1, nav_col2 = st.columns(2)
 
 with nav_col1:
     with st.container(border=True):
@@ -129,10 +61,26 @@ with nav_col2:
 - **＋ テクニカル** RSI・MA乖離・52週高値比も同時表示
 """)
 
+nav_col3, nav_col4 = st.columns(2)
+
 with nav_col3:
     with st.container(border=True):
         st.page_link(
-            "pages/4_⚖️_portfolio_dashboard.py",
+            "pages/4_📈_reit_bond_correlation.py",
+            label="📈 REITアナリティクス",
+        )
+        st.markdown("""
+J-REITと金利の相関を多角的に分析し、セクター別の投資機会を可視化します。
+- **全体俯瞰**: REIT指数と JGB 10年利回りのスプレッド推移
+- **セクター詳細**: オフィス・物流・住宅・商業ホテル別の分配金利回り比較
+- **Top5スコアリング**: イールドスプレッドに基づく銘柄ランキング
+- **買いシグナル**: 高利回り水準・底打ち検知アラート
+""")
+
+with nav_col4:
+    with st.container(border=True):
+        st.page_link(
+            "pages/5_⚖️_portfolio_dashboard.py",
             label="⚖️ ポートフォリオ診断",
         )
         st.markdown("""
@@ -146,8 +94,93 @@ with nav_col3:
 
 st.divider()
 
+# ── データ更新パネル ─────────────────────────────────────────────────────────
+st.subheader("🔄 データ更新")
+
+def _has_results(key: str) -> bool:
+    return bool(st.session_state.get(key))
+
+def _any_buffett() -> bool:
+    return any(
+        st.session_state.get(f"buffett_results_{m}")
+        for m in ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]
+    )
+
+def _run_update(targets: list[str]) -> None:
+    """キャッシュクリア＋対象スクリーナーの自動再実行フラグをセット。"""
+    import importlib
+    # yfinance / 財務省CSV のキャッシュを全クリア
+    st.cache_data.clear()
+    msgs = []
+    if "dividend" in targets and _has_results("screener_results"):
+        del st.session_state["screener_results"]
+        st.session_state["_auto_rerun_dividend"] = True
+        msgs.append("高配当")
+    if "buffett" in targets and _any_buffett():
+        for m in ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]:
+            st.session_state.pop(f"buffett_results_{m}", None)
+        st.session_state["_auto_rerun_buffett"] = True
+        msgs.append("バフェット")
+    if "signal" in targets and _has_results("bottom_results"):
+        del st.session_state["bottom_results"]
+        st.session_state["_auto_rerun_signal"] = True
+        msgs.append("シグナル")
+    if "reit" in targets:
+        st.session_state.pop("reit_top5", None)
+        msgs.append("REIT（次回ページ訪問時に自動更新）")
+    if msgs:
+        st.success(f"更新キューに追加: {' / '.join(msgs)}\n各ページを開くと自動で再実行されます。")
+    else:
+        st.info("対象スクリーナーの実行履歴がありません。各ページで一度実行してください。")
+
+upd_col1, upd_col2, upd_col3, upd_col4, upd_col5 = st.columns(5)
+
+with upd_col1:
+    if st.button("🔄 全て更新", type="primary", use_container_width=True):
+        _run_update(["dividend", "buffett", "signal", "reit"])
+
+with upd_col2:
+    div_label = "🎯 高配当" + (" ✅" if _has_results("screener_results") else " —")
+    if st.button(div_label, use_container_width=True):
+        _run_update(["dividend"])
+
+with upd_col3:
+    buf_label = "📐 バフェット" + (" ✅" if _any_buffett() else " —")
+    if st.button(buf_label, use_container_width=True):
+        _run_update(["buffett"])
+
+with upd_col4:
+    sig_label = "🏹 シグナル" + (" ✅" if _has_results("bottom_results") else " —")
+    if st.button(sig_label, use_container_width=True):
+        _run_update(["signal"])
+
+with upd_col5:
+    reit_label = "📈 REIT" + (" ✅" if _has_results("reit_top5") else " —")
+    if st.button(reit_label, use_container_width=True):
+        _run_update(["reit"])
+
+st.caption("✅ = 実行済み（更新可能） | — = 未実行（各ページで先に実行してください）")
+
+st.divider()
+
 # ── Top 5 Results from each screener (直接展開表示) ──────────────────────────
 st.subheader("📊 各スクリーナー Top5 銘柄")
+
+# シグナルハンター結果をtickerで引けるよう辞書化
+_bot_map: dict = {
+    r["symbol"]: r
+    for r in st.session_state.get("bottom_results", [])
+}
+
+def _signal_caption(ticker: str) -> str:
+    """シグナルハンターの結果をキャプション文字列で返す。未実行なら空文字。"""
+    b = _bot_map.get(ticker)
+    if not b:
+        return ""
+    rsi_s  = f"RSI {b['rsi14']:.0f}" if b.get("rsi14") is not None else "RSI —"
+    ma_s   = f"MA乖離 {b['ma25_dev']:+.1f}%" if b.get("ma25_dev") is not None else "MA乖離 —"
+    sig_s  = " 🟢買" if b.get("buy_signal") else ""
+    return f"{rsi_s} | {ma_s}{sig_s}"
 
 # ── 高配当スクリーナー × シグナル・ハンター ────────────────────────────────
 st.markdown("#### 🎯 高配当スクリーナー × シグナル・ハンター")
@@ -166,11 +199,14 @@ else:
             roe_str = f"{roe*100:.1f}%" if roe else "—"
             om = r.get("operatingMargin")
             om_str = f"{om*100:.1f}%" if om else "—"
+            sig = _signal_caption(r["ticker"])
             with st.container(border=True):
                 st.markdown(f"**{r['ticker']}**")
                 st.caption(r.get("name", "")[:12])
                 st.metric("配当利回り", dy_str)
                 st.caption(f"ROE: {roe_str} | 営業利益率: {om_str}")
+                if sig:
+                    st.caption(sig)
 
 st.markdown("---")
 
@@ -198,6 +234,7 @@ else:
                 icon = "👀"
             else:
                 icon = "⚠️"
+            sig = _signal_caption(r["symbol"])
             with st.container(border=True):
                 st.markdown(f"**{r['symbol']}**")
                 st.caption(r.get("name", "")[:12])
@@ -207,6 +244,30 @@ else:
                     f"DCF:{r.get('dcf_score', 0):+d} "
                     f"GDM:{r.get('gdm_score', 0):+d}"
                 )
+                if sig:
+                    st.caption(sig)
+
+st.markdown("---")
+
+# ── REITアナリティクス Top5 ──────────────────────────────────────────────────
+st.markdown("#### 📈 REITアナリティクス Top5")
+reit_top5 = st.session_state.get("reit_top5", [])
+if not reit_top5:
+    st.info("⏳ 未実行 — REITアナリティクスを開くとTop5がここに表示されます")
+else:
+    cols = st.columns(min(len(reit_top5), 5))
+    for i, r in enumerate(reit_top5):
+        with cols[i]:
+            score = r.get("総合スコア", 0)
+            yield_val = r.get("分配金利回り (%)")
+            spread_val = r.get("スプレッド (%pt)")
+            yield_str  = f"{yield_val:.2f}%" if yield_val is not None else "—"
+            spread_str = f"{spread_val:.2f}pt" if spread_val is not None else "—"
+            with st.container(border=True):
+                st.markdown(f"**{r.get('ティッカー', '')}**")
+                st.caption(f"{r.get('セクター', '')} | {r.get('銘柄名', '')[:10]}")
+                st.metric("総合スコア", f"{score}/100")
+                st.caption(f"分配金利回り: {yield_str} | スプレッド: {spread_str}")
 
 st.divider()
 
@@ -264,11 +325,30 @@ def _build_bot_df():
     } for r in bot])
 
 
-df_div = _build_div_df()
-df_buf = _build_buf_df()
-df_bot = _build_bot_df()
+def _build_reit_df():
+    reit = st.session_state.get("reit_top5", [])
+    if not reit:
+        return None
+    return pd.DataFrame([{
+        "スクリーナー": "REITアナリティクス",
+        "ティッカー": r.get("ティッカー", ""),
+        "銘柄名": r.get("銘柄名", ""),
+        "セクター": r.get("セクター", ""),
+        "現在価格（円）": r.get("現在価格（円）", ""),
+        "分配金利回り(%)": r.get("分配金利回り (%)", ""),
+        "スプレッド(%pt)": r.get("スプレッド (%pt)", ""),
+        "総合スコア(/100)": r.get("総合スコア", ""),
+        "NAV倍率": r.get("NAV倍率", ""),
+        "LTV(%)": r.get("LTV (%)", ""),
+    } for r in reit])
 
-frames = [f for f in [df_div, df_buf, df_bot] if f is not None]
+
+df_div  = _build_div_df()
+df_buf  = _build_buf_df()
+df_bot  = _build_bot_df()
+df_reit = _build_reit_df()
+
+frames = [f for f in [df_div, df_buf, df_bot, df_reit] if f is not None]
 
 if not frames:
     st.info("各スクリーナーを実行するとここにダウンロードボタンが表示されます")
@@ -299,6 +379,9 @@ else:
             if df_bot is not None:
                 df_bot.drop(columns=["スクリーナー"]).to_excel(
                     writer, sheet_name="シグナル単体", index=False)
+            if df_reit is not None:
+                df_reit.drop(columns=["スクリーナー"]).to_excel(
+                    writer, sheet_name="REITアナリティクス", index=False)
             combined.to_excel(writer, sheet_name="全結果", index=False)
         xlsx_buf.seek(0)
         st.download_button(
@@ -400,6 +483,8 @@ else:
                  df_buf.drop(columns=["スクリーナー"]) if df_buf is not None else None),
                 ("シグナル単体 スキャン結果",
                  df_bot.drop(columns=["スクリーナー"]) if df_bot is not None else None),
+                ("REITアナリティクス Top5スコアリング",
+                 df_reit.drop(columns=["スクリーナー"]) if df_reit is not None else None),
             ]
             pdf_bytes = _make_pdf(sections)
             st.download_button(

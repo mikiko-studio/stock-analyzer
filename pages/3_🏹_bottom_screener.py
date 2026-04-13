@@ -93,8 +93,14 @@ if custom_tickers:
             watch_list.append(t)
 
 # ── Main ─────────────────────────────────────────────────────────────────────
-if run_btn or "bottom_results" in st.session_state:
-    if run_btn:
+_auto_rerun_sig = st.session_state.pop("_auto_rerun_signal", False)
+if _auto_rerun_sig and st.session_state.get("_last_watchlist_signal"):
+    watch_list = st.session_state["_last_watchlist_signal"]
+
+_trigger_run_sig = run_btn or _auto_rerun_sig
+
+if _trigger_run_sig or "bottom_results" in st.session_state:
+    if _trigger_run_sig:
         results = []
         progress = st.progress(0, text="スキャン中...")
         for i, sym in enumerate(watch_list):
@@ -148,6 +154,7 @@ if run_btn or "bottom_results" in st.session_state:
 
         progress.empty()
         st.session_state["bottom_results"] = results
+        st.session_state["_last_watchlist_signal"] = watch_list
 
     results = st.session_state.get("bottom_results", [])
     if not results:

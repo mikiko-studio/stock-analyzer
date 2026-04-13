@@ -231,12 +231,18 @@ with st.expander("📖 3層フィルターについて", expanded=False):
 """)
 
 # ── Main Execution ───────────────────────────────────────────────────────────
-if run_button or "screener_results" in st.session_state:
-    tickers = all_tickers if run_button else [
+_auto_rerun_div = st.session_state.pop("_auto_rerun_dividend", False)
+if _auto_rerun_div and st.session_state.get("_last_tickers_dividend"):
+    all_tickers = st.session_state["_last_tickers_dividend"]
+
+_trigger_run = run_button or _auto_rerun_div
+
+if _trigger_run or "screener_results" in st.session_state:
+    tickers = all_tickers if _trigger_run else [
         r["ticker"] for r in st.session_state.get("screener_results", [])
     ]
 
-    if run_button:
+    if _trigger_run:
         if not all_tickers:
             st.error("スクリーニング対象銘柄がありません。セクターを選択してください。")
             st.stop()
@@ -278,6 +284,7 @@ if run_button or "screener_results" in st.session_state:
         log_placeholder.empty()
         st.session_state["screener_results"] = results
         st.session_state["screener_config"] = cfg
+        st.session_state["_last_tickers_dividend"] = all_tickers
 
     results = st.session_state.get("screener_results", [])
     if not results:
