@@ -437,11 +437,22 @@ else:
 
             _jp_font = "Helvetica"
             _jp_font_bold = "Helvetica-Bold"
-            for _fp in [
+            _font_candidates = [
+                # Windows
                 "C:/Windows/Fonts/msgothic.ttc",
                 "C:/Windows/Fonts/YuGothM.ttc",
                 "C:/Windows/Fonts/meiryo.ttc",
-            ]:
+                "C:/Windows/Fonts/NotoSansCJK-Regular.ttc",
+                # Linux / Streamlit Cloud (fonts-noto-cjk パッケージ)
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/opentype/noto/NotoSansCJKjp-Regular.otf",
+                "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                # macOS
+                "/System/Library/Fonts/ヒラギノ角ゴシック W3.ttc",
+                "/Library/Fonts/Arial Unicode MS.ttf",
+            ]
+            for _fp in _font_candidates:
                 if os.path.exists(_fp):
                     try:
                         pdfmetrics.registerFont(TTFont("JPFont", _fp))
@@ -450,6 +461,27 @@ else:
                         break
                     except Exception:
                         pass
+
+            # 日本語フォントが見つからない場合は列名を英語化して文字化け回避
+            _JP_COL_MAP = {
+                "スクリーナー": "Screener", "銘柄": "Ticker", "会社名": "Name",
+                "配当利回り(%)": "Div.Yield%", "配当性向(%)": "PayoutRatio%",
+                "自己資本比率(%)": "EquityRatio%", "営業利益率(%)": "OpMargin%",
+                "ROE(%)": "ROE%", "総合スコア": "Score", "P/E評価": "PE",
+                "DCF評価": "DCF", "GDM評価": "GDM", "成長率(%)": "Growth%",
+                "期待CAGR(%)": "CAGR%", "RSI(14)": "RSI14", "MA乖離(%)": "MADev%",
+                "買いシグナル": "Signal", "下落理由": "DropReason",
+                "ティッカー": "Ticker", "銘柄名": "Name", "セクター": "Sector",
+                "現在価格（円）": "Price(JPY)", "分配金利回り(%)": "Dist.Yield%",
+                "スプレッド(%pt)": "Spread%pt", "総合スコア(/100)": "Score/100",
+                "NAV倍率": "NAVRatio", "LTV(%)": "LTV%",
+            }
+
+            def _safe_cols(df: pd.DataFrame) -> pd.DataFrame:
+                """日本語フォント未使用時に列名を英語化する。"""
+                if _jp_font != "Helvetica":
+                    return df
+                return df.rename(columns=_JP_COL_MAP)
 
             def _make_pdf(df_list_with_titles: list) -> bytes:
                 buf = io.BytesIO()
@@ -478,6 +510,7 @@ else:
                 for title, df in df_list_with_titles:
                     if df is None or df.empty:
                         continue
+                    df = _safe_cols(df)
                     story.append(Paragraph(title, section_style))
                     header = list(df.columns)
                     rows = [header] + [
