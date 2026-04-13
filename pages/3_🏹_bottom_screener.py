@@ -4,8 +4,6 @@ pages/3_🏹_bottom_screener.py
 RSI + MA乖離 + ニュース解析による押し目買い判定
 """
 
-import re
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -13,52 +11,10 @@ import streamlit as st
 
 from utils.constants import WATCH_LIST_JP, WATCH_LIST_US
 from utils.data_fetcher import fetch_with_cache_flag
+from utils.screener_runner import classify_drop_reason, check_volume_spike
 from utils.ui_helpers import format_pct, format_currency, hero_header, render_export_buttons
 
 hero_header("シグナル・ハンター", "テクニカル分析 × ニュース解析による押し目買い判定", "🏹")
-
-# ── News pattern matching ─────────────────────────────────────────────────────
-NEWS_PATTERNS = [
-    (r"earnings.miss|業績.下方|利益.減少|赤字|予想.下回", "📉 業績悪化"),
-    (r"rate.hike|利上げ|金利.上昇|Fed|日銀", "🏦 金利上昇懸念"),
-    (r"trade.war|関税|tariff|貿易摩擦|制裁", "🌐 貿易摩擦"),
-    (r"recession|景気.後退|GDP.マイナス|経済.悪化", "📊 景気後退懸念"),
-    (r"sector.rotation|セクター.ローテ|資金.移動", "🔄 セクターローテーション"),
-    (r"sell.off|急落|暴落|パニック", "😱 市場パニック"),
-    (r"downgrade|格下げ|レーティング.引下", "⬇️ アナリスト格下げ"),
-    (r"scandal|不祥事|不正|訴訟|リコール", "⚠️ 企業スキャンダル"),
-    (r"dividend.cut|減配|配当.削減", "💸 減配"),
-    (r"supply.chain|サプライチェーン|供給.不足", "🔗 サプライチェーン問題"),
-]
-
-
-def classify_drop_reason(news_list):
-    """Classify drop reason from news titles using pattern matching."""
-    if not news_list:
-        return "📰 ニュースなし"
-    all_text = " ".join(
-        item.get("title", "") for item in news_list[:5]
-    ).lower()
-    for pattern, label in NEWS_PATTERNS:
-        if re.search(pattern, all_text, re.IGNORECASE):
-            return label
-    return "❓ 不明 / その他"
-
-
-def check_volume_spike(hist_1y):
-    """Check if today's volume is significantly higher than 20-day average."""
-    if hist_1y is None or hist_1y.empty or "Volume" not in hist_1y.columns:
-        return None, None
-    vol = hist_1y["Volume"].dropna()
-    if len(vol) < 20:
-        return None, None
-    avg_20d = float(vol.iloc[-21:-1].mean())
-    today_vol = float(vol.iloc[-1])
-    if avg_20d == 0:
-        return None, None
-    ratio = today_vol / avg_20d
-    return today_vol, ratio
-
 
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:

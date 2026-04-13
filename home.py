@@ -10,6 +10,8 @@ import datetime
 import pandas as pd
 import streamlit as st
 
+from utils.reit_data import run_reit_top5
+from utils.screener_runner import run_dividend_screener, run_buffett_screener, run_signal_screener
 from utils.ui_helpers import score_color
 
 # ── ヘッダー & ツール説明 ──────────────────────────────────────────────────────
@@ -97,69 +99,61 @@ st.divider()
 # ── データ更新パネル ─────────────────────────────────────────────────────────
 st.subheader("🔄 データ更新")
 
-def _has_results(key: str) -> bool:
-    return bool(st.session_state.get(key))
-
 def _any_buffett() -> bool:
     return any(
         st.session_state.get(f"buffett_results_{m}")
         for m in ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]
     )
 
-def _run_update(targets: list[str]) -> None:
-    """キャッシュクリア＋対象スクリーナーの自動再実行フラグをセット。"""
-    import importlib
-    # yfinance / 財務省CSV のキャッシュを全クリア
+def _execute_screeners(targets: list[str]) -> None:
+    """対象スクリーナーをデフォルト条件で即時実行し session_state に格納する。"""
     st.cache_data.clear()
-    msgs = []
-    if "dividend" in targets and _has_results("screener_results"):
-        del st.session_state["screener_results"]
-        st.session_state["_auto_rerun_dividend"] = True
-        msgs.append("高配当")
-    if "buffett" in targets and _any_buffett():
-        for m in ["🇯🇵 日本株", "🇺🇸 米国株", "🌐 両方"]:
-            st.session_state.pop(f"buffett_results_{m}", None)
-        st.session_state["_auto_rerun_buffett"] = True
-        msgs.append("バフェット")
-    if "signal" in targets and _has_results("bottom_results"):
-        del st.session_state["bottom_results"]
-        st.session_state["_auto_rerun_signal"] = True
-        msgs.append("シグナル")
+    placeholder = st.empty()
+
+    if "dividend" in targets:
+        prog = st.progress(0, text="高配当スクリーナー実行中...")
+        results = run_dividend_screener(
+            progress_cb=lambda r, t: prog.progress(r, text=f"🎯 高配当: {t}")
+        )
+        st.session_state["screener_results"] = results
+        st.session_state["_last_tickers_dividend"] = [
+            r["ticker"] for r in results
+        ]
+        prog.empty()
+
+    if "buffett" in targets:
+        prog = st.progress(0, text="バフェットスクリーナー実行中...")
+        results = run_buffett_screener(
+            progress_cb=lambda r, t: prog.progress(r, text=f"📐 バフェット: {t}")
+        )
+        st.session_state["buffett_results_🇯🇵 日本株"] = results
+        st.session_state["_last_stocks_buffett"] = results
+        prog.empty()
+
+    if "signal" in targets:
+        prog = st.progress(0, text="シグナルハンター実行中...")
+        results = run_signal_screener(
+            progress_cb=lambda r, t: prog.progress(r, text=f"🏹 シグナル: {t}")
+        )
+        st.session_state["bottom_results"] = results
+        st.session_state["_last_watchlist_signal"] = [r["symbol"] for r in results]
+        prog.empty()
+
     if "reit" in targets:
-        st.session_state.pop("reit_top5", None)
-        msgs.append("REIT（次回ページ訪問時に自動更新）")
-    if msgs:
-        st.success(f"更新キューに追加: {' / '.join(msgs)}\n各ページを開くと自動で再実行されます。")
-    else:
-        st.info("対象スクリーナーの実行履歴がありません。各ページで一度実行してください。")
+        prog = st.progress(0, text="REITアナリティクス実行中...")
+        prog.progress(0.3, text="📈 REIT: JGB利回り取得中...")
+        prog.progress(0.6, text="📈 REIT: 銘柄価格取得中...")
+        results = run_reit_top5()
+        st.session_state["reit_top5"] = results
+        prog.empty()
 
-upd_col1, upd_col2, upd_col3, upd_col4, upd_col5 = st.columns(5)
+    placeholder.success("✅ 更新完了！")
 
-with upd_col1:
-    if st.button("🔄 全て更新", type="primary", use_container_width=True):
-        _run_update(["dividend", "buffett", "signal", "reit"])
+if st.button("🔄 全て更新", type="primary"):
+    _execute_screeners(["dividend", "buffett", "signal", "reit"])
+    st.rerun()
 
-with upd_col2:
-    div_label = "🎯 高配当" + (" ✅" if _has_results("screener_results") else " —")
-    if st.button(div_label, use_container_width=True):
-        _run_update(["dividend"])
-
-with upd_col3:
-    buf_label = "📐 バフェット" + (" ✅" if _any_buffett() else " —")
-    if st.button(buf_label, use_container_width=True):
-        _run_update(["buffett"])
-
-with upd_col4:
-    sig_label = "🏹 シグナル" + (" ✅" if _has_results("bottom_results") else " —")
-    if st.button(sig_label, use_container_width=True):
-        _run_update(["signal"])
-
-with upd_col5:
-    reit_label = "📈 REIT" + (" ✅" if _has_results("reit_top5") else " —")
-    if st.button(reit_label, use_container_width=True):
-        _run_update(["reit"])
-
-st.caption("✅ = 実行済み（更新可能） | — = 未実行（各ページで先に実行してください）")
+st.caption("デフォルト条件で即時実行（高配当・バフェット・シグナル・REIT）")
 
 st.divider()
 
@@ -172,15 +166,59 @@ _bot_map: dict = {
     for r in st.session_state.get("bottom_results", [])
 }
 
-def _signal_caption(ticker: str) -> str:
-    """シグナルハンターの結果をキャプション文字列で返す。未実行なら空文字。"""
+def _render_signal_block(ticker: str) -> None:
+    """シグナルハンターの分析結果をカード内に視覚的に表示する。未実行なら何も出さない。"""
     b = _bot_map.get(ticker)
     if not b:
-        return ""
-    rsi_s  = f"RSI {b['rsi14']:.0f}" if b.get("rsi14") is not None else "RSI —"
-    ma_s   = f"MA乖離 {b['ma25_dev']:+.1f}%" if b.get("ma25_dev") is not None else "MA乖離 —"
-    sig_s  = " 🟢買" if b.get("buy_signal") else ""
-    return f"{rsi_s} | {ma_s}{sig_s}"
+        return
+
+    st.markdown("<hr style='margin:6px 0;opacity:.3'>", unsafe_allow_html=True)
+    st.caption("🏹 シグナル・ハンター")
+
+    rsi = b.get("rsi14")
+    ma  = b.get("ma25_dev")
+    vol = b.get("vol_ratio")
+    buy = b.get("buy_signal", False)
+
+    # 買いシグナルバッジ
+    if buy:
+        st.markdown("🟢 **買いシグナル検出**")
+    else:
+        st.markdown("⬜ シグナルなし")
+
+    # RSI
+    if rsi is not None:
+        if rsi < 30:
+            rsi_label = f"🔴 RSI {rsi:.0f} 売られすぎ"
+        elif rsi < 40:
+            rsi_label = f"🟡 RSI {rsi:.0f} 弱め"
+        elif rsi < 60:
+            rsi_label = f"⚪ RSI {rsi:.0f} 中立"
+        elif rsi < 70:
+            rsi_label = f"🟠 RSI {rsi:.0f} やや強め"
+        else:
+            rsi_label = f"🔴 RSI {rsi:.0f} 買われすぎ"
+        st.caption(rsi_label)
+
+    # MA乖離
+    if ma is not None:
+        if ma <= -5:
+            ma_label = f"📉 MA乖離 {ma:+.1f}% 下乖離"
+        elif ma >= 5:
+            ma_label = f"📈 MA乖離 {ma:+.1f}% 上乖離"
+        else:
+            ma_label = f"➡️ MA乖離 {ma:+.1f}%"
+        st.caption(ma_label)
+
+    # 出来高比率
+    if vol is not None:
+        if vol >= 2.0:
+            vol_label = f"🔊 出来高 {vol:.1f}x 急増"
+        elif vol >= 1.5:
+            vol_label = f"🔉 出来高 {vol:.1f}x 増加"
+        else:
+            vol_label = f"🔈 出来高 {vol:.1f}x"
+        st.caption(vol_label)
 
 # ── 高配当スクリーナー × シグナル・ハンター ────────────────────────────────
 st.markdown("#### 🎯 高配当スクリーナー × シグナル・ハンター")
@@ -199,14 +237,12 @@ else:
             roe_str = f"{roe*100:.1f}%" if roe else "—"
             om = r.get("operatingMargin")
             om_str = f"{om*100:.1f}%" if om else "—"
-            sig = _signal_caption(r["ticker"])
             with st.container(border=True):
                 st.markdown(f"**{r['ticker']}**")
                 st.caption(r.get("name", "")[:12])
                 st.metric("配当利回り", dy_str)
                 st.caption(f"ROE: {roe_str} | 営業利益率: {om_str}")
-                if sig:
-                    st.caption(sig)
+                _render_signal_block(r["ticker"])
 
 st.markdown("---")
 
@@ -234,7 +270,6 @@ else:
                 icon = "👀"
             else:
                 icon = "⚠️"
-            sig = _signal_caption(r["symbol"])
             with st.container(border=True):
                 st.markdown(f"**{r['symbol']}**")
                 st.caption(r.get("name", "")[:12])
@@ -244,8 +279,7 @@ else:
                     f"DCF:{r.get('dcf_score', 0):+d} "
                     f"GDM:{r.get('gdm_score', 0):+d}"
                 )
-                if sig:
-                    st.caption(sig)
+                _render_signal_block(r["symbol"])
 
 st.markdown("---")
 

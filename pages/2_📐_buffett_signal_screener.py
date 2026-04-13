@@ -9,6 +9,11 @@ import streamlit as st
 
 from utils.constants import JP_STOCKS, SECTOR_PE_JP, SECTOR_PE_US, US_STOCKS
 from utils.data_fetcher import _cached_fetch, fetch_with_cache_flag
+from utils.screener_runner import (
+    DISCOUNT_RATE, TERMINAL_GROWTH, DCF_YEARS, HURDLE_RATE, GROWTH_CAPS,
+    calc_pe_score, calc_dcf, calc_dcf_score, calc_gdm, calc_gdm_score,
+    calc_cagr, analyze_stock,
+)
 from utils.ui_helpers import format_pct, format_currency, hero_header, score_color, render_export_buttons
 
 hero_header("バフェットスクリーナー × シグナル・ハンター", "P/E・DCF・GDM × テクニカル指標による割安銘柄発見", "📐")
@@ -61,23 +66,6 @@ with st.expander("📖 三角測量スクリーニングについて", expanded=
 | 1点以下 | ⚠️ 見送り | 割高感あり。新規買いは見送り |
 """)
 
-# ── Constants ────────────────────────────────────────────────────────────────
-DISCOUNT_RATE = 0.09
-TERMINAL_GROWTH = 0.03
-DCF_YEARS = 10
-HURDLE_RATE = 0.10
-
-GROWTH_CAPS = {
-    "Technology": 0.20, "Communication Services": 0.15,
-    "Consumer Discretionary": 0.15, "Consumer Staples": 0.10,
-    "Healthcare": 0.12, "Financials": 0.10, "Industrials": 0.12,
-    "Energy": 0.08, "Materials": 0.08, "Utilities": 0.07,
-    "Real Estate": 0.08,
-    "電気機器": 0.15, "情報通信": 0.15, "医薬品": 0.12,
-    "輸送用機器": 0.08, "銀行業": 0.07, "小売業": 0.10,
-    "機械": 0.10, "化学": 0.08, "サービス業": 0.12,
-}
-
 # ── Sidebar ─────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.header("⚙️ スクリーナー設定")
@@ -99,145 +87,6 @@ with st.sidebar:
 
     card_view = st.toggle("🃏 カード表示モード", value=False)
     run_btn = st.button("🚀 分析実行", type="primary", use_container_width=True)
-
-
-# ── Valuation Models ─────────────────────────────────────────────────────────
-def calc_pe_score(pe, sector, sector_pe_map):
-    if pe is None or np.isnan(pe):
-        return 0, None
-    benchmark = sector_pe_map.get(sector, 20)
-    ratio = pe / benchmark
-    if ratio < 0.6:
-        return 2, ratio
-    elif ratio < 0.8:
-        return 1, ratio
-    elif ratio < 1.0:
-        return 0, ratio
-    elif ratio < 1.3:
-        return -1, ratio
-    else:
-        return -2, ratio
-
-
-def calc_dcf(eps, growth_rate, discount_rate=DISCOUNT_RATE,
-             terminal_growth=TERMINAL_GROWTH, years=DCF_YEARS):
-    if eps is None or eps <= 0:
-        return None
-    pv = 0
-    for y in range(1, years + 1):
-        projected_eps = eps * (1 + growth_rate) ** y
-        pv += projected_eps / (1 + discount_rate) ** y
-    terminal_eps = eps * (1 + growth_rate) ** years
-    terminal_value = (terminal_eps * (1 + terminal_growth)) / (discount_rate - terminal_growth)
-    pv += terminal_value / (1 + discount_rate) ** years
-    return pv
-
-
-def calc_dcf_score(price, intrinsic_value):
-    if intrinsic_value is None or price is None or intrinsic_value <= 0:
-        return 0, None
-    margin = (intrinsic_value - price) / intrinsic_value
-    if margin > 0.30:
-        return 2, margin
-    elif margin > 0.10:
-        return 1, margin
-    elif margin > -0.10:
-        return 0, margin
-    elif margin > -0.30:
-        return -1, margin
-    else:
-        return -2, margin
-
-
-def calc_gdm(eps, growth_rate, bond_yield=0.045):
-    if eps is None or eps <= 0:
-        return None
-    if bond_yield <= 0:
-        bond_yield = 0.045
-    return eps * (8.5 + 2 * growth_rate * 100) * 4.4 / (bond_yield * 100)
-
-
-def calc_gdm_score(price, gdm_value):
-    if gdm_value is None or price is None or gdm_value <= 0:
-        return 0, None
-    margin = (gdm_value - price) / gdm_value
-    if margin > 0.30:
-        return 2, margin
-    elif margin > 0.10:
-        return 1, margin
-    elif margin > -0.10:
-        return 0, margin
-    elif margin > -0.30:
-        return -1, margin
-    else:
-        return -2, margin
-
-
-def calc_cagr(price, eps, div_yield, growth_rate, years=10):
-    if price is None or eps is None or price <= 0:
-        return None
-    future_price = price * (1 + growth_rate) ** years
-    total_divs = price * div_yield * years if div_yield else 0
-    try:
-        cagr = ((future_price + total_divs) / price) ** (1 / years) - 1
-        return cagr
-    except Exception:
-        return None
-
-
-def analyze_stock(stock_info, data, sector_pe_jp=SECTOR_PE_JP, sector_pe_us=SECTOR_PE_US):
-    """Run all 3 valuation models on a stock."""
-    if data is None:
-        return None
-
-    symbol = stock_info["symbol"]
-    is_jp_stock = symbol.endswith(".T")
-    sector_pe_map = sector_pe_jp if is_jp_stock else sector_pe_us
-
-    sector = stock_info.get("sector", data.get("sector", "Unknown"))
-    price = data.get("price")
-    eps = data.get("trailingEps") or data.get("forwardEps")
-    pe = data.get("trailingPE")
-    div_yield = data.get("dividendYield") or 0
-    revenue_growth = data.get("revenueGrowth") or 0
-    earnings_growth = data.get("earningsGrowth") or 0
-
-    raw_growth = max(revenue_growth, earnings_growth)
-    cap = GROWTH_CAPS.get(sector, 0.12)
-    growth = min(max(raw_growth, 0.02), cap)
-
-    pe_score, pe_ratio = calc_pe_score(pe, sector, sector_pe_map)
-    dcf_val = calc_dcf(eps, growth)
-    dcf_score, dcf_margin = calc_dcf_score(price, dcf_val)
-    gdm_val = calc_gdm(eps, growth)
-    gdm_score, gdm_margin = calc_gdm_score(price, gdm_val)
-    composite = pe_score + dcf_score + gdm_score
-
-    cagr = calc_cagr(price, eps, div_yield, growth)
-    benchmark = sector_pe_map.get(sector, 20)
-
-    return {
-        "symbol": symbol,
-        "name": stock_info.get("name", data.get("name", symbol)),
-        "sector": sector,
-        "price": price,
-        "currency": data.get("currency", "USD"),
-        "pe": pe,
-        "eps": eps,
-        "growth": growth,
-        "dcf_value": dcf_val,
-        "gdm_value": gdm_val,
-        "pe_score": pe_score,
-        "pe_ratio": pe_ratio,
-        "pe_benchmark": benchmark,
-        "dcf_score": dcf_score,
-        "dcf_margin": dcf_margin,
-        "gdm_score": gdm_score,
-        "gdm_margin": gdm_margin,
-        "composite": composite,
-        "cagr": cagr,
-        "div_yield": div_yield,
-    }
 
 
 # ── Buy Signal Icon & Technical Data ─────────────────────────────────────────
