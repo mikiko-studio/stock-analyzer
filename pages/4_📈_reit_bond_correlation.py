@@ -992,6 +992,41 @@ def build_sector_ranking_table(sector_data: dict[str, pd.DataFrame]) -> pd.DataF
     )
 
 
+# ─────────────────────────── セクター評価 ────────────────────────────────────
+def _evaluate_sector_grade(
+    info: dict, sector_df: pd.DataFrame | None
+) -> tuple[str, str]:
+    """
+    セクターの総合評価を返す: (verdict, color_hex)
+    NAV倍率・LTV・稼働率・スプレッド分位で採点。
+    """
+    score = 0
+    nav = info.get("nav_ratio", 1.1)
+    ltv = info.get("ltv", 45.0)
+    occ = info.get("occupancy", 95.0)
+
+    if nav <= 1.00: score += 2
+    elif nav <= 1.05: score += 1
+
+    if ltv <= 40.0: score += 2
+    elif ltv <= 43.0: score += 1
+
+    if occ >= 97.0: score += 2
+    elif occ >= 95.0: score += 1
+
+    if sector_df is not None:
+        spread_s = sector_df["spread"].dropna()
+        if len(spread_s) >= 10:
+            cur = float(spread_s.iloc[-1])
+            avg = float(spread_s.mean())
+            if cur >= avg + 0.2: score += 2
+            elif cur >= avg:     score += 1
+
+    if score >= 6: return "🟢 強気", "#4CAF50"
+    if score >= 4: return "🟡 中立", "#FFC107"
+    return "🟠 慎重",  "#FF7043"
+
+
 # ─────────────────────────── Top5 カード ─────────────────────────────────────
 def render_top5_cards(scores_df: pd.DataFrame) -> None:
     top5 = scores_df.head(5).reset_index(drop=True)
@@ -1099,6 +1134,40 @@ def _render_macro_tab(
 ) -> None:
     # 2軸チャート + NAV バー
     st.markdown("#### 📈 全体推移（価格・金利・NAV）")
+    with st.expander("📖 この画面で使われている指標の読み方（初心者向け）", expanded=False):
+        st.markdown("""
+**🏦 分配金利回り（%）**
+REITが1年間に出す「分配金」が、今の市場価格の何%にあたるかを示します。
+例：価格が10万円のREITが年間4,000円の分配金を出すなら **利回り4%**。数字が大きいほど「利益を得やすい」状態です。
+
+---
+**📊 イールドスプレッド（%pt）**
+REIT利回りから「日本国債10年利回り（ほぼリスクゼロの投資）」を引いた差です。
+スプレッドが大きい = REIT投資の「ボーナス分」が多い = 相対的に割安。
+目安：1.5%pt以上で割安、1.0%pt以下で割高と判断されることが多いです。
+
+---
+**🏢 NAV倍率（純資産価値倍率）**
+REITが持っている不動産を全部売ったときの価値（NAV）と、今の市場価格の比率です。
+1.0倍 = 適正価格／1.0倍未満 = 不動産の価値より安く買える「割安」状態／1.2倍超 = 割高の目安。
+
+---
+**💳 LTV（有利子負債比率）**
+不動産購入のために借りているお金の割合です（ローン比率のイメージ）。
+低いほど金利上昇の影響を受けにくく安全。一般に40%以下が低リスクの目安です。
+
+---
+**📉 相関係数（REIT vs 金利）**
+-1.0〜+1.0の数値で、REITの価格と金利がどれくらい連動するかを示します。
+- **マイナス**（特に-0.7以下）: 金利が上がるとREIT価格が下がりやすい（逆相関）
+- **ゼロ付近**: ほぼ無関係に動いている
+- **プラス**: 金利とREITが同じ方向に動く
+
+---
+**🔔 買いシグナル**
+過去180日間の最高利回りの90%以上に今の利回りが達したとき発動。
+「過去と比べて今が高利回り水準 = 相対的に割安」というサインです。
+        """)
     col_main, col_nav = st.columns([3, 2])
     with col_main:
         if df_corr is not None:
@@ -1242,6 +1311,56 @@ def _render_sector_tab(
         st.info("サイドバーの「分析対象セクター」で1つ以上のセクターを選択してください。")
         return
 
+    # ── セクター評価カード（4セクター一覧）────────────────────
+    st.markdown("#### 🏢 セクター別 総合評価")
+    with st.expander("📖 指標の見方（大学生向け）", expanded=False):
+        st.markdown("""
+**分配金利回り**: 年間にもらえる分配金 ÷ 市場価格 × 100。高いほど収益性が良い。
+**NAV倍率**: 市場価格 ÷ 不動産の純資産。1倍未満は「実態より安く買える」割安サイン。
+**LTV**: 借金の割合。低いほど金利上昇に強い。40%以下が優良水準。
+**稼働率**: テナントが埋まっている割合。高いほど安定収益が見込める。
+**NOI利回り**: 物件から生む純収益 ÷ 物件価格。高いほど運用効率が良い。
+**評価**: NAV・LTV・稼働率・スプレッドの4指標で総合判断（🟢強気 / 🟡中立 / 🟠慎重）。
+        """)
+
+    sec_cols = st.columns(len(SECTOR_ANALYSIS))
+    for si, sec_info in enumerate(SECTOR_ANALYSIS):
+        grade, grade_color = _evaluate_sector_grade(sec_info, None)
+        nav = sec_info.get("nav_ratio", "—")
+        ltv = sec_info.get("ltv", "—")
+        occ = sec_info.get("occupancy", "—")
+        noi = sec_info.get("noi_yield", "—")
+        sec_color = _SECTOR_COLOR_MAP.get(sec_info["sector"], "#9E9E9E")
+        nav_str = f"{nav:.2f}x" if isinstance(nav, (int, float)) else str(nav)
+        ltv_str = f"{ltv:.1f}%" if isinstance(ltv, (int, float)) else str(ltv)
+        occ_str = f"{occ:.1f}%" if isinstance(occ, (int, float)) else str(occ)
+        noi_str = f"{noi:.1f}%" if isinstance(noi, (int, float)) else str(noi)
+        with sec_cols[si]:
+            st.markdown(
+                f"""
+                <div style="background:linear-gradient(135deg,#0e1117 0%,#1a1f2e 100%);
+                            border:2px solid {sec_color};border-radius:10px;
+                            padding:14px 12px;margin-bottom:8px;">
+                    <div style="font-size:0.7rem;color:{sec_color};font-weight:700;
+                                letter-spacing:0.06em;text-transform:uppercase;">{sec_info['sector']}</div>
+                    <div style="font-size:0.78rem;color:#ccc;margin:4px 0 8px;font-weight:600;">{sec_info['name']}</div>
+                    <div style="font-size:1.0rem;font-weight:800;color:{grade_color};margin-bottom:8px;">{grade}</div>
+                    <div style="border-top:1px solid {sec_color}44;padding-top:8px;
+                                font-size:0.68rem;color:#bbb;line-height:2.0;">
+                        🏦 NAV倍率: <b style='color:#eee'>{nav_str}</b><br>
+                        💳 LTV: <b style='color:#eee'>{ltv_str}</b><br>
+                        🏢 稼働率: <b style='color:#eee'>{occ_str}</b><br>
+                        📈 NOI利回り: <b style='color:#eee'>{noi_str}</b>
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            with st.expander("背景・トレンド"):
+                st.caption(sec_info.get("trend_reason", ""))
+
+    st.divider()
+
     # ── セクター比較チャート ─────────────────────────────────
     st.markdown("#### 📊 セクター比較 — 平均利回り・NAV 倍率")
     col_yield, col_nav = st.columns([3, 2])
@@ -1289,6 +1408,69 @@ def _render_sector_tab(
         "💡 NAV倍率・LTV・NOI利回り・稼働率は直近決算レポートに基づく参考値。"
         "配当スコアは過去1年スプレッドのパーセンタイル順位（高いほど割安）。"
     )
+
+    # ── 全サブ銘柄 評価カード ────────────────────────────────
+    st.divider()
+    st.markdown("#### 📋 構成銘柄 一覧評価")
+    st.caption("各セクターを構成する全銘柄のファンダメンタルズ参考値を一覧表示します。")
+
+    with st.expander("📖 各指標の意味（大学生向け）", expanded=False):
+        st.markdown("""
+**分配金（円/口）**: 1口あたり年間にもらえる金額。銘柄によって金額が大きく異なります。
+**NAV倍率**: 不動産の純資産価値との比率。低いほど割安。1.0未満 = 純資産より安く買える。
+**LTV**: 借入比率。低いほど財務が健全で、金利上昇に耐えられる。
+**含み益割合**: 所有する不動産の帳簿価格に対する含み益の割合。高いほど資産価値が上昇している。
+**分配金増減率**: 前期と比べて分配金が増えたか減ったか（+が増配、-が減配）。
+        """)
+
+    uni_map = {r["ticker"]: r for r in universe_records}
+    for sec_info in SECTOR_ANALYSIS:
+        if sec_info["ticker"] not in selected_sectors:
+            continue
+        sec_color = _SECTOR_COLOR_MAP.get(sec_info["sector"], "#9E9E9E")
+        st.markdown(
+            f"<span style='color:{sec_color};font-weight:700;font-size:0.9rem;'>"
+            f"● {sec_info['sector']}</span>",
+            unsafe_allow_html=True,
+        )
+        sub_cols = st.columns(len(sec_info["sub_tickers"]))
+        for ci, sub in enumerate(sec_info["sub_tickers"]):
+            live = uni_map.get(sub["ticker"], {})
+            cur_price = live.get("current_price")
+            cur_yield = live.get("current_yield")
+            nav = sub.get("nav_ratio", "—")
+            ltv = sub.get("ltv", "—")
+            urg = sub.get("unrealized_gain_pct", "—")
+            dg  = sub.get("dist_growth")
+            dg_str = f"{dg:+.1f}%" if dg is not None else "—"
+            dg_color = "#4CAF50" if dg and dg > 0 else ("#EF5350" if dg and dg < 0 else "#aaa")
+            price_str = f"¥{cur_price:,}" if cur_price else "—"
+            yield_str = f"{cur_yield:.2f}%" if cur_yield else "—"
+            nav_str = f"{nav:.2f}x" if isinstance(nav, (int, float)) else str(nav)
+            ltv_str = f"{ltv:.1f}%" if isinstance(ltv, (int, float)) else str(ltv)
+            urg_str = f"{urg:.1f}%" if isinstance(urg, (int, float)) else str(urg)
+
+            with sub_cols[ci]:
+                st.markdown(
+                    f"""
+                    <div style="background:#0e1117;border:1px solid {sec_color}66;
+                                border-radius:8px;padding:12px 10px;margin-bottom:6px;">
+                        <div style="font-size:0.72rem;color:{sec_color};font-weight:700;">{sub['ticker']}</div>
+                        <div style="font-size:0.8rem;color:#ddd;font-weight:600;margin:2px 0 6px;
+                                    line-height:1.25;">{sub['name']}</div>
+                        <div style="font-size:0.68rem;color:#aaa;line-height:1.9;">
+                            💰 現在価格: <b style='color:#eee'>{price_str}</b><br>
+                            📊 分配金利回り: <b style='color:#80CBC4'>{yield_str}</b><br>
+                            🏦 NAV倍率: <b style='color:#eee'>{nav_str}</b><br>
+                            💳 LTV: <b style='color:#eee'>{ltv_str}</b><br>
+                            📈 含み益: <b style='color:#eee'>{urg_str}</b><br>
+                            🔄 分配金増減: <b style='color:{dg_color}'>{dg_str}</b>
+                        </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        st.write("")
 
     # ── 個別銘柄詳細分析 ────────────────────────────────────
     st.divider()
@@ -1381,8 +1563,42 @@ def _render_sector_tab(
 # ─────────────────────────── タブ③：Top5 Pick ────────────────────────────────
 def _render_top5_tab(universe_records: list[dict]) -> None:
     st.markdown("### ⭐ 購入対象 Top5 セレクション")
+    st.markdown("以下のスコアリングアルゴリズムで全12銘柄を採点し、上位5銘柄を表示します。")
+    with st.expander("📖 スコアリングの仕組みと指標の読み方（初心者向け）", expanded=False):
+        st.markdown("""
+### 採点方法（合計100点満点）
+
+#### ① イールドスプレッドスコア（最大40点）
+**スプレッド** = REIT分配金利回り − 日本国債10年利回り
+
+国債はほぼリスクゼロの投資です。REITの利回りが国債より大きく上回るほど「お得」です。
+過去1年間のスプレッドと比べて、現在が上位何%にいるかを0〜40点で採点します。
+
+> 例：過去1年で今のスプレッドが上位10%なら → 40 × 0.90 ≈ **36点**
+
+---
+
+#### ② NAV倍率スコア（最大30点）
+**NAV倍率** = 市場価格 ÷ 不動産の純資産価値
+
+NAVが1.0倍を下回ると「実際の資産価値より安く買える」割安状態です。
+NAV 0.95以下 → 30点満点、NAV 1.15以上 → 0点というスケールで採点します。
+
+> 例：NAV 1.04 → (1.15 - 1.04) / 0.20 × 30 ≈ **17点**
+
+---
+
+#### ③ LTVスコア（最大30点）
+**LTV（Loan to Value）** = 借入金 ÷ 物件価格
+
+金利が上がると借入コストが増え、分配金が減るリスクがあります。
+LTVが低いほど金利上昇に強く、安全度が高い。LTV 35%以下 → 30点、50%以上 → 0点。
+
+> 例：LTV 42.1% → (50.0 - 42.1) / 15.0 × 30 ≈ **16点**
+
+---
+        """)
     st.markdown(
-        "以下のスコアリングアルゴリズムで全12銘柄を採点し、上位5銘柄を表示します。\n\n"
         "| 軸 | 指標 | 最大 | 評価基準 |\n"
         "|---|---|---|---|\n"
         "| ① | イールドスプレッド | 40pt | 1年分位数が高いほど割安 |\n"
@@ -1416,6 +1632,33 @@ def _render_top5_tab(universe_records: list[dict]) -> None:
     # 全銘柄スコアリングテーブル
     st.markdown("#### 📋 全銘柄 スコアリング詳細")
     st.dataframe(scores_df, hide_index=True, use_container_width=True)
+
+    # 全銘柄スコア視覚化
+    st.markdown("#### 📊 全銘柄スコア比較")
+    st.caption("棒グラフで全12銘柄のスコアを比較できます。スコアが高いほど「今が買いやすい水準」です。")
+    _colors_bar = [
+        _SECTOR_COLOR_MAP.get(row["セクター"], "#9E9E9E")
+        for _, row in scores_df.iterrows()
+    ]
+    _fig_all = go.Figure(go.Bar(
+        x=scores_df["銘柄名"],
+        y=scores_df["総合スコア"],
+        marker=dict(color=_colors_bar, opacity=0.85),
+        text=scores_df["総合スコア"],
+        textposition="outside",
+        hovertemplate="%{x}<br>総合スコア: %{y}点<extra></extra>",
+    ))
+    _fig_all.add_hline(y=60, line_dash="dash", line_color="#FFC107", line_width=1.5,
+                       annotation_text="60点（目安）", annotation_position="right",
+                       annotation_font=dict(size=10, color="#FFC107"))
+    _fig_all.update_layout(
+        height=320, margin=dict(l=10, r=100, t=20, b=80),
+        plot_bgcolor="#0e1117", paper_bgcolor="#0e1117", font=dict(color="#fafafa"),
+        yaxis=dict(range=[0, 105], gridcolor="#1e2130"),
+        xaxis=dict(tickangle=-30, gridcolor="#1e2130"),
+        showlegend=False,
+    )
+    st.plotly_chart(_fig_all, use_container_width=True, key="all_stocks_score_bar")
 
     st.caption(
         "⚠️ NAV倍率・LTVは直近決算レポートに基づく参考値です。"
@@ -1534,12 +1777,12 @@ def render() -> None:
         st.metric(
             "分配金利回り（概算）", f"{dist_yield_cur:.2f}%",
             delta=f"{yield_delta:+.2f}%pt" if not np.isnan(yield_delta) else None,
-            help=f"年間分配金 ¥{ANNUAL_DIST_YEN:.0f} ÷ 時価 × 100 の参考値。",
+            help=f"年間分配金（¥{ANNUAL_DIST_YEN:.0f}/口）を現在の市場価格で割った値です。例：価格が2,000円で年間分配金が80円なら利回り4%。数値が高いほど投資の「旨み」が大きい。",
         )
         st.metric(
             f"配当スコア　{score_eval}", score_str,
             delta=f"1年平均スプレッド比 {spread_cur - spread_avg:+.2f}pt",
-            help="過去1年間のイールドスプレッドのパーセンタイル順位（100点満点）。",
+            help="過去1年間のイールドスプレッドのパーセンタイル順位（0〜100点）。70点以上は「過去と比べて今が割安」の目安。スプレッドとはREIT利回りと国債利回りの差のことです。",
         )
     with cat_b:
         st.markdown(
@@ -1552,12 +1795,12 @@ def render() -> None:
         st.metric(
             "イールドスプレッド", f"{spread_cur:.2f}%pt",
             delta=f"1年平均比 {spread_cur - spread_avg:+.2f}pt" if not np.isnan(spread_avg) else None,
-            help="REIT 分配金利回り − JGB 10年利回り。スプレッドが広いほど割安。",
+            help="REIT分配金利回りから日本国債10年利回りを引いた差です。スプレッドが広いほど「リスクを取る見返り（プレミアム）」が大きく割安。1.5%pt以上で割安、1.0%pt以下で割高の目安。",
         )
         bond_str = f"{bond_last:.3f}%" if not np.isnan(bond_last) else "—"
         chg_str  = f"{bond_chg:+.3f}pt" if not np.isnan(bond_chg) else None
         st.metric("10年金利（直近）", bond_str, delta=chg_str,
-                  help="日本国債10年利回り（財務省公表）。上昇するとスプレッド縮小・価格下落圧力。")
+                  help="日本国債10年利回り（財務省公表）。ほぼリスクゼロの投資基準となる金利です。上昇するとREITのスプレッドが縮小し、価格下落圧力になります。")
     with cat_c:
         st.markdown(
             "<p style='font-size:0.75rem;font-weight:700;color:#CE93D8;"
@@ -1570,14 +1813,14 @@ def render() -> None:
         corr_delta_str = f"{corr_delta:+.3f}" if not np.isnan(corr_delta) else None
         st.metric(
             f"20日相関係数　{corr_state_short}", corr_str_disp, delta=corr_delta_str,
-            help="−1 に近いほど「金利上昇→REIT下落」の逆相関が強い。⚠️−0.7 以下は強い負の相関。",
+            help="-1.0〜+1.0の数値でREIT価格と金利の連動度を示します。マイナス（特に-0.7以下）は「金利上昇→REIT下落」の逆相関が強い状態。ゼロ付近はほぼ無関係、プラスは同じ方向に動く。",
         )
         reit_ret_str = f"{reit_ret:+.2%}" if not np.isnan(reit_ret) else "—"
         st.metric(
             "高利回りシグナル", buy_sig_str,
             delta=reit_ret_str + " 前日騰落" if not np.isnan(reit_ret) else None,
             delta_color="normal",
-            help=f"分配金利回りが過去{BUY_SIGNAL_WINDOW}日最高値の{BUY_SIGNAL_RATIO:.0%}以上で発動。",
+            help=f"過去{BUY_SIGNAL_WINDOW}日間の最高利回りの{BUY_SIGNAL_RATIO:.0%}以上に現在の利回りが達したとき発動。「過去と比べて今が高利回り水準 = 相対的に割安」というサインです。",
         )
 
     st.divider()
