@@ -14,6 +14,8 @@ import pandas as pd
 import streamlit as st
 import yfinance as yf
 
+from utils.yf_session import YF_SESSION
+
 
 def _safe_get(info, key, default=None):
     """Safely get a value from yfinance info dict."""
@@ -184,7 +186,7 @@ def _cached_fetch(symbol: str) -> dict | None:
     Cached for 1 hour. Returns standardized dict or None on failure.
     """
     try:
-        ticker = yf.Ticker(symbol)
+        ticker = yf.Ticker(symbol, session=YF_SESSION)
         info = ticker.info or {}
 
         # Determine market

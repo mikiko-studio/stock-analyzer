@@ -10,6 +10,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+from utils.yf_session import YF_SESSION
+
 # ─────────────────────────── 定数 ────────────────────────────────────────────
 MOF_ALL_CSV    = "https://www.mof.go.jp/jgbs/reference/interest_rate/data/jgbcm_all.csv"
 MOF_RECENT_CSV = "https://www.mof.go.jp/jgbs/reference/interest_rate/jgbcm.csv"
@@ -137,7 +139,7 @@ def _parse_jp_era_date(s: str) -> pd.Timestamp:
 
 
 def _read_mof_csv(url: str) -> list[tuple[pd.Timestamp, float]]:
-    r = requests.get(url, timeout=20)
+    r = YF_SESSION.get(url, timeout=20)
     r.raise_for_status()
     lines = r.content.decode("shift_jis", errors="replace").splitlines()
     rows: list[tuple[pd.Timestamp, float]] = []
@@ -173,7 +175,7 @@ def fetch_universe_close(period: str = "1y") -> pd.DataFrame | None:
     """全ユニバース12銘柄の終値を一括取得。"""
     tickers = list({r["ticker"] for r in REIT_UNIVERSE})
     try:
-        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True)
+        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return None
         close = raw["Close"].copy() if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].copy()

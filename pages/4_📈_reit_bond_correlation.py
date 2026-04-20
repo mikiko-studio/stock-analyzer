@@ -20,6 +20,8 @@ import requests
 import streamlit as st
 import yfinance as yf
 
+from utils.yf_session import YF_SESSION
+
 from utils.ui_helpers import hero_header
 
 # ─────────────────────────── 定数 ────────────────────────────────────────────
@@ -212,7 +214,7 @@ _SECTOR_COLOR_MAP: dict[str, str] = {
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_reit(period: str = "1y") -> pd.Series | None:
     try:
-        df = yf.download(REIT_TICKER, period=period, progress=False, auto_adjust=True)
+        df = yf.download(REIT_TICKER, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if df.empty:
             return None
         close = df["Close"]
@@ -228,7 +230,7 @@ def fetch_reit(period: str = "1y") -> pd.Series | None:
 @st.cache_data(ttl=3600, show_spinner=False)
 def fetch_reit_ohlcv(period: str = "1y") -> pd.DataFrame | None:
     try:
-        raw = yf.download(REIT_TICKER, period=period, progress=False, auto_adjust=True)
+        raw = yf.download(REIT_TICKER, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return None
         if isinstance(raw.columns, pd.MultiIndex):
@@ -250,7 +252,7 @@ def _parse_jp_era_date(s: str) -> pd.Timestamp:
 
 
 def _read_mof_csv(url: str) -> list[tuple[pd.Timestamp, float]]:
-    r = requests.get(url, timeout=20)
+    r = YF_SESSION.get(url, timeout=20)
     r.raise_for_status()
     lines = r.content.decode("shift_jis", errors="replace").splitlines()
     rows: list[tuple[pd.Timestamp, float]] = []
@@ -284,7 +286,7 @@ def fetch_sector_prices() -> dict[str, float | None]:
     tickers = [r["ticker"] for r in SECTOR_REITS]
     prices: dict[str, float | None] = {t: None for t in tickers}
     try:
-        raw = yf.download(tickers, period="5d", progress=False, auto_adjust=True)
+        raw = yf.download(tickers, period="5d", progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return prices
         close = raw["Close"]
@@ -308,7 +310,7 @@ def fetch_sector_close(period: str = "1y") -> pd.DataFrame | None:
     """セクター代表4銘柄の終値を一括取得（セクター分析用）。"""
     tickers = [s["ticker"] for s in SECTOR_ANALYSIS]
     try:
-        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True)
+        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return None
         if isinstance(raw.columns, pd.MultiIndex):
@@ -328,7 +330,7 @@ def fetch_universe_close(period: str = "1y") -> pd.DataFrame | None:
     """全ユニバース12銘柄の終値を一括取得（Top5 スコアリング用）。"""
     tickers = list({r["ticker"] for r in REIT_UNIVERSE})
     try:
-        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True)
+        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return None
         if isinstance(raw.columns, pd.MultiIndex):
@@ -347,7 +349,7 @@ def fetch_universe_close(period: str = "1y") -> pd.DataFrame | None:
 def fetch_ticker_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame | None:
     """任意ティッカーの OHLCV を取得（個別銘柄分析用）。"""
     try:
-        raw = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+        raw = yf.download(ticker, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
         if raw.empty:
             return None
         if isinstance(raw.columns, pd.MultiIndex):
