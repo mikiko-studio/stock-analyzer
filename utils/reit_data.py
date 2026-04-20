@@ -175,7 +175,7 @@ def fetch_universe_close(period: str = "1y") -> pd.DataFrame | None:
     """全ユニバース12銘柄の終値を一括取得。"""
     tickers = list({r["ticker"] for r in REIT_UNIVERSE})
     try:
-        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True, session=YF_SESSION)
+        raw = yf.download(tickers, period=period, progress=False, auto_adjust=True)
         if raw.empty:
             return None
         close = raw["Close"].copy() if isinstance(raw.columns, pd.MultiIndex) else raw[["Close"]].copy()
