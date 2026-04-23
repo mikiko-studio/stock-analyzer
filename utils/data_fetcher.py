@@ -178,11 +178,11 @@ def _get_dividend_history(ticker_obj):
         return pd.Series(dtype=float)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=1800, show_spinner=False)
 def _cached_fetch(symbol: str) -> dict | None:
     """
     Fetch all data for a symbol from yfinance.
-    Cached for 1 hour. Returns standardized dict or None on failure.
+    Cached for 30 minutes. Returns standardized dict or None on failure.
     """
     try:
         ticker = yf.Ticker(symbol)

@@ -106,54 +106,78 @@ def _any_buffett() -> bool:
     )
 
 def _execute_screeners(targets: list[str]) -> None:
-    """対象スクリーナーをデフォルト条件で即時実行し session_state に格納する。"""
-    st.cache_data.clear()
-    placeholder = st.empty()
+    """
+    対象スクリーナーをデフォルト条件で即時実行し session_state に格納する。
+    ※ キャッシュクリアは行わない。yfinance の @st.cache_data(ttl=3600) が
+      1時間ごとに自動更新するため、ボタン押下直後は最新キャッシュで高速実行する。
+    """
+    errors: list[str] = []
 
     if "dividend" in targets:
-        prog = st.progress(0, text="高配当スクリーナー実行中...")
-        results = run_dividend_screener(
-            progress_cb=lambda r, t: prog.progress(r, text=f"🎯 高配当: {t}")
-        )
-        st.session_state["screener_results"] = results
-        st.session_state["_last_tickers_dividend"] = [
-            r["ticker"] for r in results
-        ]
-        prog.empty()
+        try:
+            prog = st.progress(0, text="高配当スクリーナー実行中...")
+            results = run_dividend_screener(
+                progress_cb=lambda r, t: prog.progress(r, text=f"🎯 高配当: {t}")
+            )
+            st.session_state["screener_results"] = results
+            st.session_state["_last_tickers_dividend"] = [
+                r["ticker"] for r in results
+            ]
+            prog.empty()
+        except Exception as e:
+            errors.append(f"高配当: {e}")
 
     if "buffett" in targets:
-        prog = st.progress(0, text="バフェットスクリーナー実行中...")
-        results = run_buffett_screener(
-            progress_cb=lambda r, t: prog.progress(r, text=f"📐 バフェット: {t}")
-        )
-        st.session_state["buffett_results_🇯🇵 日本株"] = results
-        st.session_state["_last_stocks_buffett"] = results
-        prog.empty()
+        try:
+            prog = st.progress(0, text="バフェットスクリーナー実行中...")
+            results = run_buffett_screener(
+                progress_cb=lambda r, t: prog.progress(r, text=f"📐 バフェット: {t}")
+            )
+            st.session_state["buffett_results_🇯🇵 日本株"] = results
+            st.session_state["_last_stocks_buffett"] = results
+            prog.empty()
+        except Exception as e:
+            errors.append(f"バフェット: {e}")
 
     if "signal" in targets:
-        prog = st.progress(0, text="シグナルハンター実行中...")
-        results = run_signal_screener(
-            progress_cb=lambda r, t: prog.progress(r, text=f"🏹 シグナル: {t}")
-        )
-        st.session_state["bottom_results"] = results
-        st.session_state["_last_watchlist_signal"] = [r["symbol"] for r in results]
-        prog.empty()
+        try:
+            prog = st.progress(0, text="シグナルハンター実行中...")
+            results = run_signal_screener(
+                progress_cb=lambda r, t: prog.progress(r, text=f"🏹 シグナル: {t}")
+            )
+            st.session_state["bottom_results"] = results
+            st.session_state["_last_watchlist_signal"] = [r["symbol"] for r in results]
+            prog.empty()
+        except Exception as e:
+            errors.append(f"シグナル: {e}")
 
     if "reit" in targets:
-        prog = st.progress(0, text="REITアナリティクス実行中...")
-        prog.progress(0.3, text="📈 REIT: JGB利回り取得中...")
-        prog.progress(0.6, text="📈 REIT: 銘柄価格取得中...")
-        results = run_reit_top5()
-        st.session_state["reit_top5"] = results
-        prog.empty()
+        try:
+            prog = st.progress(0, text="REITアナリティクス実行中...")
+            prog.progress(0.3, text="📈 REIT: JGB利回り取得中...")
+            prog.progress(0.6, text="📈 REIT: 銘柄価格取得中...")
+            results = run_reit_top5()
+            st.session_state["reit_top5"] = results
+            prog.empty()
+        except Exception as e:
+            errors.append(f"REIT: {e}")
 
-    placeholder.success("✅ 更新完了！")
+    if errors:
+        st.error("⚠️ 一部エラー: " + " / ".join(errors))
+    else:
+        st.success("✅ 更新完了！")
 
-if st.button("🔄 全て更新", type="primary"):
-    _execute_screeners(["dividend", "buffett", "signal", "reit"])
-    st.rerun()
-
-st.caption("デフォルト条件で即時実行（高配当・バフェット・シグナル・REIT）")
+col_btn, col_info = st.columns([1, 3])
+with col_btn:
+    if st.button("🔄 全て更新", type="primary", use_container_width=True):
+        _execute_screeners(["dividend", "buffett", "signal", "reit"])
+        st.rerun()
+with col_info:
+    st.caption(
+        "💡 キャッシュ内の最新データでスクリーニングを即実行します。"
+        "データは yfinance により **1時間ごと**に自動更新されます。"
+        "強制リフレッシュする場合は1時間後に再実行してください。"
+    )
 
 st.divider()
 
