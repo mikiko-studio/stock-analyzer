@@ -108,8 +108,8 @@ def _any_buffett() -> bool:
 def _execute_screeners(targets: list[str]) -> None:
     """
     対象スクリーナーをデフォルト条件で即時実行し session_state に格納する。
-    ※ キャッシュクリアは行わない。yfinance の @st.cache_data(ttl=3600) が
-      1時間ごとに自動更新するため、ボタン押下直後は最新キャッシュで高速実行する。
+    ステータスは st.session_state["_update_status"] に保存し、
+    st.rerun() 後も表示が消えないようにする。
     """
     errors: list[str] = []
 
@@ -162,16 +162,29 @@ def _execute_screeners(targets: list[str]) -> None:
         except Exception as e:
             errors.append(f"REIT: {e}")
 
+    # ステータスを session_state に保存（st.rerun() 後も消えない）
+    now_str = datetime.datetime.now().strftime("%H:%M")
     if errors:
-        st.error("⚠️ 一部エラー: " + " / ".join(errors))
+        st.session_state["_update_status"] = (
+            "error", f"⚠️ 一部エラー ({now_str}): " + " / ".join(errors)
+        )
     else:
-        st.success("✅ 更新完了！")
+        st.session_state["_update_status"] = (
+            "success", f"✅ 全スクリーナー更新完了 ({now_str})"
+        )
+
+# ステータスをボタンの前に表示（rerun 後も残る）
+if "_update_status" in st.session_state:
+    _stype, _smsg = st.session_state["_update_status"]
+    if _stype == "error":
+        st.error(_smsg)
+    else:
+        st.success(_smsg)
 
 col_btn, col_info = st.columns([1, 3])
 with col_btn:
     if st.button("🔄 全て更新", type="primary", use_container_width=True):
         _execute_screeners(["dividend", "buffett", "signal", "reit"])
-        st.rerun()
 with col_info:
     st.caption(
         "💡 キャッシュ内の最新データでスクリーニングを即実行します。"
